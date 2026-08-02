@@ -94,7 +94,8 @@ cmd_install() {
 		-e "egress_sandbox_users=[\"$(id -un)\"]" \
 		-e "agent_sessions_user=$(id -un)" \
 		-e "agent_sessions_project_dir=$project_dir" \
-		-e "publish_gate_host=$gate_host"
+		-e "publish_gate_host=$gate_host" \
+		-e "publish_token=$([ "$auth" = mtls ] && [ -n "$gate_host" ] && echo false || echo true)"
 
 	ok "the stand is configured"
 	if [ -n "$gate_host" ]; then
