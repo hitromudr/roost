@@ -1,0 +1,21 @@
+---
+- name: Reload nginx
+  ansible.builtin.systemd_service:
+    name: nginx
+    state: reloaded
+  when:
+    - not ansible_check_mode
+    - ansible_service_mgr == 'systemd'
+
+# Containers and images built without an init system are a normal place to
+# put a gate, and there systemd is simply absent. The configuration has
+# already been checked with `nginx -t`; reloading is best-effort because
+# nginx may legitimately not be running yet in an image being built.
+- name: Reload nginx without systemd
+  ansible.builtin.command: nginx -s reload
+  register: gate_nginx_reload
+  changed_when: gate_nginx_reload.rc == 0
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - ansible_service_mgr != 'systemd'

@@ -1,0 +1,12 @@
+---
+# The gate: the public entry point in front of a stand.
+#
+#   ansible-playbook -i ansible/inventory ansible/playbooks/gate.yml --check
+#
+# Needs a TLS certificate for gate_domain to exist already — obtain it with
+# certbot before the first run, or point gate_tls_cert at whatever you use.
+- name: Configure the public gate
+  hosts: gate
+  become: true
+  roles:
+    - gate

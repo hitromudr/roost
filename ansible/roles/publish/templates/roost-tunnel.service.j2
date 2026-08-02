@@ -1,0 +1,25 @@
+# {{ ansible_managed }}
+# Keeps this stand reachable from the gate. The stand dials out, so no
+# inbound port and no public address are needed here.
+[Unit]
+Description=roost reverse tunnel to {{ publish_gate_host }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=TUNNEL_GATE_HOST={{ publish_gate_host }}
+Environment=TUNNEL_GATE_USER={{ publish_gate_user }}
+Environment=TUNNEL_GATE_PORT={{ publish_gate_port }}
+Environment=TUNNEL_REMOTE_PORT={{ publish_remote_port }}
+Environment=TUNNEL_LOCAL_PORT={{ publish_listen.split(':')[1] }}
+Environment=TUNNEL_KEY={{ publish_tunnel_key }}
+Environment=AUTOSSH_GATETIME=0
+# The command line is generated so its flags can be unit-tested; see
+# files/tunnel-command.
+ExecStart=/bin/sh -c 'exec $({{ publish_tunnel_bin }})'
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

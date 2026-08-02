@@ -1,0 +1,22 @@
+---
+# Where the web terminal comes from. Pinning a tag rather than tracking a
+# branch: an agent stand is infrastructure, and infrastructure should not
+# change under you because upstream pushed to main.
+publish_pockterm_repo: https://github.com/hitromudr/pockterm
+publish_pockterm_version: main
+publish_pockterm_dir: /opt/pockterm
+
+# The terminal listens here. Loopback only — everything from outside arrives
+# through the gate.
+publish_listen: 127.0.0.1:8130
+
+# The gate: a machine with a routable address that fronts this stand. Leave
+# publish_gate_host empty when the stand is public and needs no tunnel.
+publish_gate_host: ""
+publish_gate_user: roost-tunnel
+publish_gate_port: 22
+# Port on the gate's loopback where this stand appears. One per stand.
+publish_remote_port: 18130
+
+publish_tunnel_key: /etc/roost/tunnel_key
+publish_tunnel_bin: /usr/local/sbin/tunnel-command
