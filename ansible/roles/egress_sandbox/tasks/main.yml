@@ -7,6 +7,14 @@
       expected pinned, proxied or direct
     quiet: true
 
+# Created before anything writes into it: several tasks below do, and a
+# missing directory fails them one by one.
+- name: Create the roost configuration directory
+  ansible.builtin.file:
+    path: /etc/roost
+    state: directory
+    mode: "0755"
+
 - name: Create the sandbox group
   ansible.builtin.group:
     name: "{{ egress_sandbox_group }}"
@@ -47,6 +55,7 @@
     path: "{{ egress_sandbox_env_file | dirname }}"
     state: directory
     mode: "0755"
+  when: (egress_sandbox_env_file | dirname) != '/etc/roost'
 
 # Written once as a template when no URL is supplied: overwriting on every run
 # would erase what the operator typed in by hand.
