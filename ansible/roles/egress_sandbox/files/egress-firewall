@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# egress-firewall — outbound policy for the agent's group.
+#
+# Every rule matches on `--gid-owner`, so the policy follows the process, not
+# the port or the destination: whatever the agent starts inherits the group
+# and the same restrictions.
+#
+#   egress-firewall rules   print the rules that apply to this configuration
+#   egress-firewall apply   make them true (idempotent)
+#   egress-firewall clear   remove exactly the rules tagged as ours
+#   egress-firewall show    what is currently in place
+#
+# `rules` exists so the policy can be tested without root and so a running
+# machine can be compared against what it should be. Configuration comes from
+# the environment; the ansible role writes it into the unit.
+#
+#   EGRESS_GROUP    group name, also the comment tag on every rule
+#   EGRESS_GID      numeric gid the rules match on
+#   EGRESS_PROFILE  pinned | proxied | direct
+#   EGRESS_ALLOW    space-separated destinations, only for `proxied`
+set -euo pipefail
+
+GROUP="${EGRESS_GROUP:-}"
+GID="${EGRESS_GID:-}"
+PROFILE="${EGRESS_PROFILE:-pinned}"
+ALLOW="${EGRESS_ALLOW:-}"
+
+die() { printf 'egress-firewall: %s\n' "$*" >&2; exit 1; }
+
+[ -n "$GROUP" ] || die "EGRESS_GROUP is not set"
+case "$PROFILE" in
+	pinned|proxied|direct) ;;
+	*) die "unknown profile '$PROFILE' (expected pinned, proxied or direct)" ;;
+esac
+# direct needs no gid: it installs nothing.
+if [ "$PROFILE" != direct ] && [ -z "$GID" ]; then
+	die "EGRESS_GID is not set — refusing to guess which group to restrict"
+fi
+
+# emit prints one rule per line: the binary, then its arguments. Both `rules`
+# and `apply` walk the same list, so what is tested is what gets installed.
+emit() {
+	if [ "$PROFILE" = direct ]; then
+		echo "# profile 'direct': no restrictions installed"
+		return
+	fi
+
+	local tag="--comment $GROUP"
+	local own="-m owner --gid-owner $GID"
+
+	# Loopback first: the local proxy lives there, and rejecting it would
+	# cut off the only way out the agent is given.
+	echo "iptables -o lo $own -j ACCEPT -m comment $tag-lo"
+	echo "iptables -d 127.0.0.0/8 $own -j ACCEPT -m comment $tag-loopback"
+	echo "ip6tables -o lo $own -j ACCEPT -m comment $tag-lo"
+	echo "ip6tables -d ::1/128 $own -j ACCEPT -m comment $tag-loopback"
+
+	if [ "$PROFILE" = proxied ]; then
+		local dest
+		for dest in $ALLOW; do
+			case "$dest" in
+				*:*) echo "ip6tables -d $dest $own -j ACCEPT -m comment $tag-allow" ;;
+				*)   echo "iptables -d $dest $own -j ACCEPT -m comment $tag-allow" ;;
+			esac
+		done
+	fi
+
+	# Default deny last, so the accepts above win.
+	echo "iptables $own -j REJECT --reject-with icmp-port-unreachable -m comment $tag-deny"
+	echo "ip6tables $own -j REJECT --reject-with icmp6-port-unreachable -m comment $tag-deny"
+}
+
+# run_rule applies one emitted line with the given iptables verb.
+run_rule() {
+	local verb="$1" line="$2"
+	local bin="${line%% *}" args="${line#* }"
+	# shellcheck disable=SC2086 # args are ours, word splitting is intended
+	$bin "$verb" OUTPUT $args
+}
+
+apply() {
+	local line bin args
+	while read -r line; do
+		[ -z "$line" ] || [ "${line:0:1}" = "#" ] && continue
+		bin="${line%% *}"
+		args="${line#* }"
+		# -C asks "is this already here?", so re-running changes nothing.
+		# shellcheck disable=SC2086
+		if ! $bin -C OUTPUT $args 2>/dev/null; then
+			case "$args" in
+				*REJECT*) run_rule -A "$line" ;;  # deny goes to the end
+				*)        run_rule -I "$line" ;;  # accepts go to the front
+			esac
+		fi
+	done < <(emit)
+}
+
+clear_rules() {
+	local bin
+	for bin in iptables ip6tables; do
+		# Delete by comment tag: only rules this script installed carry it.
+		while read -r _num spec; do
+			[ -n "$spec" ] || continue
+			# shellcheck disable=SC2086
+			$bin -D OUTPUT $spec 2>/dev/null || true
+		done < <($bin -S OUTPUT 2>/dev/null | grep -- "--comment \"\?$GROUP" | sed 's/^-A OUTPUT /0 /')
+	done
+}
+
+show() {
+	local bin
+	for bin in iptables ip6tables; do
+		$bin -S OUTPUT 2>/dev/null | grep -- "$GROUP" || true
+	done
+}
+
+case "${1:-rules}" in
+	rules) emit ;;
+	apply) apply ;;
+	clear) clear_rules ;;
+	show)  show ;;
+	*)     die "usage: $0 {rules|apply|clear|show}" ;;
+esac

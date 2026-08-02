@@ -1,0 +1,12 @@
+---
+# The stand: the machine agents run on.
+#
+#   ansible-playbook -i ansible/inventory ansible/playbooks/stand.yml --check
+#
+# Start with --check. The egress policy decides what the agent can reach, and
+# a surprise there is a surprise about your agent's network access.
+- name: Configure the agent stand
+  hosts: stand
+  become: true
+  roles:
+    - egress_sandbox

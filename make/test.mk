@@ -7,4 +7,7 @@ test: ## Run bats tests
 		echo "no tests yet"; \
 	fi
 
+test-integration: ## Prove the egress policy in a throwaway container (needs docker)
+	bash tests/integration/egress_container.sh
+
 check: lint test ## Lint and test

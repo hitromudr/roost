@@ -1,0 +1,9 @@
+---
+- name: Reapply egress policy
+  ansible.builtin.systemd_service:
+    name: egress-firewall
+    state: restarted
+    daemon_reload: true
+  when:
+    - egress_sandbox_profile != "direct"
+    - not ansible_check_mode
