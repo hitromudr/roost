@@ -87,3 +87,26 @@ files exactly what you can.
 make help     # list targets
 make check    # lint and tests
 ```
+
+## Removing it
+
+```bash
+./roost uninstall --dry-run   # show what goes and what stays
+./roost uninstall             # asks for confirmation
+./roost uninstall --purge     # plus the group, the token and roost.conf
+./roost gate remove user@vps.example
+```
+
+What goes: the rules and their unit, the launcher, the session helper, the
+tunnel, the web terminal with its unit and checkout, and `/etc/roost`. What
+stays: your projects and any running sessions — removing those should be a
+decision, not a default. `--purge` additionally removes the sandbox group,
+`/etc/pockterm` with its token, and `roost.conf` itself.
+
+On the gate, `gate remove` takes out the vhost and the tunnel account but
+keeps the client CA: deleting it invalidates the certificates already
+installed on your devices. `--purge` removes that too. The domain's TLS
+certificate is never touched.
+
+Verified in a container: after teardown no rules remain in either address
+family, and the machine is back to how it started.

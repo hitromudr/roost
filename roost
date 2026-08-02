@@ -5,7 +5,9 @@
 #   roost install   apply the configuration to this machine
 #   roost doctor    check that the stand is what it claims to be
 #   roost qr        show the link for your phone as a QR code
-#   roost gate add <user@host>   prepare a public entry point
+#   roost gate add <user@host>      prepare a public entry point
+#   roost gate remove <user@host>   undo that
+#   roost uninstall [--purge]       remove roost from this machine
 #
 # Everything it does is an ansible role underneath; this wrapper exists so
 # that the common path is one command and the questions are asked once.
@@ -103,11 +105,10 @@ cmd_install() {
 }
 
 cmd_gate() {
-	[ "${1:-}" = "add" ] || die "usage: roost gate add <user@host>"
-	local target="${2:-}"
-	[ -n "$target" ] || die "usage: roost gate add <user@host>"
+	local action="${1:-}" target="${2:-}"
+	case "$action" in add | remove) ;; *) die "usage: roost gate {add|remove} <user@host>" ;; esac
+	[ -n "$target" ] || die "usage: roost gate $action <user@host>"
 	load_conf
-	check_conf
 	[ -n "$gate_domain" ] || die "gate_domain is empty — set it in $CONF"
 
 	local inv="${TMPDIR:-/tmp}/roost-gate-inventory.$$"
@@ -115,11 +116,75 @@ cmd_gate() {
 		"${target#*@}" "${target#*@}" "${target%@*}" > "$inv"
 	trap 'rm -f "$inv"' RETURN
 
+	if [ "$action" = remove ]; then
+		log "removing roost from the gate at ${target#*@}"
+		ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/gate-teardown.yml" \
+			-e "gate_domain=$gate_domain" ${purge:+-e roost_purge=true}
+		return
+	fi
+
+	check_conf
 	log "configuring the gate at ${target#*@}"
 	ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/gate.yml" \
 		-e "gate_domain=$gate_domain" \
 		-e "gate_auth=$auth" \
 		-e "gate_tunnel_keys=[\"$(cat /etc/roost/tunnel_key.pub 2>/dev/null || echo '')\"]"
+}
+
+# --- uninstall ----------------------------------------------------------
+# Removing something is worth being explicit about, so this prints what will
+# go and what will stay, and asks — unless told not to.
+
+cmd_uninstall() {
+	local purge="" assume_yes="" dry=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--purge)   purge=1 ;;
+			--yes|-y)  assume_yes=1 ;;
+			--dry-run) dry=1 ;;
+			*) die "unknown option $1 (expected --purge, --yes, --dry-run)" ;;
+		esac
+		shift
+	done
+
+	cat <<EOF
+This removes from $(hostname):
+  · the egress rules and their unit
+  · the agent launcher and the session helper
+  · the tunnel to the gate, if any
+  · the web terminal, its unit and its checkout
+  · /etc/roost
+
+It keeps:
+  · your projects and any running tmux sessions
+  · $( [ -n "$purge" ] && echo "nothing else — --purge was given" \
+        || echo "the sandbox group and /etc/pockterm (use --purge to remove them)" )
+EOF
+
+	if [ -n "$dry" ]; then
+		log "dry run: nothing was changed"
+		return 0
+	fi
+	if [ -z "$assume_yes" ]; then
+		local reply
+		read -rp "Proceed? [y/N] " reply
+		case "$reply" in y | Y | yes) ;; *) die "cancelled" ;; esac
+	fi
+
+	command -v ansible-playbook >/dev/null || die "ansible is not installed"
+	local inv="${TMPDIR:-/tmp}/roost-inventory.$$"
+	printf '[stand]\nlocalhost ansible_connection=local\n' > "$inv"
+	trap 'rm -f "$inv"' RETURN
+
+	ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/teardown.yml" \
+		${purge:+-e roost_purge=true}
+
+	# The config is roost's own; with the machine cleaned it only misleads.
+	if [ -n "$purge" ] && [ -f "$CONF" ]; then
+		rm -f "$CONF"
+		ok "removed $CONF"
+	fi
+	log "done. If you also want the repository gone: rm -rf $ROOT"
 }
 
 # --- doctor -------------------------------------------------------------
@@ -190,9 +255,10 @@ cmd_qr() {
 }
 
 case "${1:-help}" in
-	setup)   shift; cmd_setup "$@" ;;
-	install) shift; cmd_install "$@" ;;
-	gate)    shift; cmd_gate "$@" ;;
+	setup)     shift; cmd_setup "$@" ;;
+	install)   shift; cmd_install "$@" ;;
+	gate)      shift; cmd_gate "$@" ;;
+	uninstall) shift; cmd_uninstall "$@" ;;
 	doctor)  shift; cmd_doctor "$@" ;;
 	qr)      shift; cmd_qr "$@" ;;
 	help | -h | --help) usage ;;

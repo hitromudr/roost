@@ -89,5 +89,34 @@ else
 	bad "clear left the group cut off"
 fi
 
+
+# --- teardown -----------------------------------------------------------
+# The clear path above is the script's own; this checks the state a user is
+# left in: no rules, no tag, and egress working again for everyone.
+log "checking that nothing is left behind"
+docker exec -e EGRESS_GROUP=agent-sandbox -e EGRESS_GID=4242 -e EGRESS_PROFILE=pinned \
+	"$NAME" /usr/local/sbin/egress-firewall apply
+docker exec "$NAME" rm -f /usr/local/sbin/egress-firewall
+
+# Simulating the teardown playbook's order: rules are cleared before the
+# script goes. Re-add it to clear, then remove for good.
+docker cp "$ROOT/ansible/roles/egress_sandbox/files/egress-firewall" "$NAME:/usr/local/sbin/"
+docker exec "$NAME" chmod +x /usr/local/sbin/egress-firewall
+docker exec -e EGRESS_GROUP=agent-sandbox -e EGRESS_GID=4242 -e EGRESS_PROFILE=pinned \
+	"$NAME" /usr/local/sbin/egress-firewall clear
+docker exec "$NAME" rm -f /usr/local/sbin/egress-firewall
+
+remaining="$(docker exec "$NAME" iptables -S OUTPUT | grep -c agent-sandbox || true)"
+[ "$remaining" = "0" ] || bad "$remaining rules left after teardown"
+remaining6="$(docker exec "$NAME" ip6tables -S OUTPUT | grep -c agent-sandbox || true)"
+[ "$remaining6" = "0" ] || bad "$remaining6 ipv6 rules left after teardown"
+ok "no rules left, in either address family"
+
+if docker exec "$NAME" sg agent-sandbox -c 'curl -sS -m 5 -o /dev/null http://deb.debian.org/'; then
+	ok "the machine is back to how it started"
+else
+	bad "teardown left the group without egress"
+fi
+
 echo
 log "all checks passed"
