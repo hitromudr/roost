@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+# Reinstates the agent's egress policy at boot. Ordered before the network
+# comes up: rules that appear after the agent could have started are rules
+# that were not there when it mattered.
+[Unit]
+Description=roost egress policy for group {{ egress_sandbox_group }}
+After=network-pre.target
+Before=network.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=EGRESS_GROUP={{ egress_sandbox_group }}
+Environment=EGRESS_GID={{ egress_sandbox_group_info.gid }}
+Environment=EGRESS_PROFILE={{ egress_sandbox_profile }}
+Environment=EGRESS_ALLOW={{ egress_sandbox_allow | join(' ') }}
+ExecStart={{ egress_sandbox_firewall_bin }} apply
+ExecStop={{ egress_sandbox_firewall_bin }} clear
+
+[Install]
+WantedBy=multi-user.target

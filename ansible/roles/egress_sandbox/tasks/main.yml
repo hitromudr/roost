@@ -1,0 +1,112 @@
+---
+- name: Validate the egress profile
+  ansible.builtin.assert:
+    that: egress_sandbox_profile in ['pinned', 'proxied', 'direct']
+    fail_msg: >-
+      egress_sandbox_profile is '{{ egress_sandbox_profile }}';
+      expected pinned, proxied or direct
+    quiet: true
+
+- name: Create the sandbox group
+  ansible.builtin.group:
+    name: "{{ egress_sandbox_group }}"
+    state: present
+  register: egress_sandbox_group_info
+
+- name: Add users to the sandbox group
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: "{{ egress_sandbox_group }}"
+    append: true
+  loop: "{{ egress_sandbox_users }}"
+
+- name: Install the firewall script
+  ansible.builtin.copy:
+    src: egress-firewall
+    dest: "{{ egress_sandbox_firewall_bin }}"
+    mode: "0755"
+  notify: Reapply egress policy
+
+- name: Install the agent launcher
+  ansible.builtin.copy:
+    src: agent-run
+    dest: "{{ egress_sandbox_wrapper }}"
+    mode: "0755"
+
+# The launcher reads its configuration from the environment, and a wrapper
+# script is the least surprising way to supply it: the user types `agent-run`,
+# not a line of exports.
+- name: Configure the agent launcher
+  ansible.builtin.template:
+    src: agent-run.env.j2
+    dest: /etc/roost/agent-run.env
+    mode: "0644"
+
+- name: Ensure the credentials directory exists
+  ansible.builtin.file:
+    path: "{{ egress_sandbox_env_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+# Written once as a template when no URL is supplied: overwriting on every run
+# would erase what the operator typed in by hand.
+- name: Seed the credentials file
+  ansible.builtin.copy:
+    content: |
+      # Proxy the sandboxed agent reaches the internet through.
+      # PROXY_URL=http://user:password@127.0.0.1:8129
+    dest: "{{ egress_sandbox_env_file }}"
+    mode: "0600"
+    force: false
+  when: egress_sandbox_proxy_url | length == 0
+
+- name: Write the credentials file
+  ansible.builtin.copy:
+    content: "PROXY_URL={{ egress_sandbox_proxy_url }}\n"
+    dest: "{{ egress_sandbox_env_file }}"
+    mode: "0600"
+  when: egress_sandbox_proxy_url | length > 0
+  no_log: true
+
+- name: Install the firewall unit
+  ansible.builtin.template:
+    src: egress-firewall.service.j2
+    dest: /etc/systemd/system/egress-firewall.service
+    mode: "0644"
+  notify: Reapply egress policy
+
+# The rules live in the kernel, not on disk, so they have to be reinstated
+# after every boot — before anything the agent might start.
+# Skipped under --check: the unit file is not written in that mode, so
+# systemd would report a service it has never heard of and the run would fail
+# on an artefact of the dry run rather than on anything real.
+- name: Enable the firewall unit
+  ansible.builtin.systemd_service:
+    name: egress-firewall
+    enabled: "{{ egress_sandbox_profile != 'direct' }}"
+    state: "{{ 'started' if egress_sandbox_profile != 'direct' else 'stopped' }}"
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Verify the policy is in place
+  ansible.builtin.command: "{{ egress_sandbox_firewall_bin }} show"
+  environment:
+    EGRESS_GROUP: "{{ egress_sandbox_group }}"
+    EGRESS_GID: "{{ egress_sandbox_group_info.gid | default('') }}"
+    EGRESS_PROFILE: "{{ egress_sandbox_profile }}"
+  register: egress_sandbox_state
+  changed_when: false
+  when:
+    - egress_sandbox_profile != 'direct'
+    - not ansible_check_mode
+
+- name: Fail when the rules did not take
+  ansible.builtin.assert:
+    that: egress_sandbox_state.stdout | length > 0
+    fail_msg: >-
+      No rules tagged '{{ egress_sandbox_group }}' are installed —
+      the agent would have unrestricted egress while looking sandboxed
+    quiet: true
+  when:
+    - egress_sandbox_profile != 'direct'
+    - not ansible_check_mode

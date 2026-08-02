@@ -3,7 +3,10 @@
 # Shell sources: the CLI wrapper plus anything under scripts/ and the
 # templates roles render. Globs are guarded so an empty match is not an error
 # while the tree is still filling up.
+# Role scripts have no extension on purpose — they are commands, not
+# libraries — so they are listed by location as well as by suffix.
 SH_FILES = $(shell find . -name '*.sh' -not -path './.git/*' 2>/dev/null) \
+           $(shell find ansible -path '*/files/*' -type f 2>/dev/null) \
            $(wildcard roost)
 
 lint: lint-sh lint-ansible ## Run all linters

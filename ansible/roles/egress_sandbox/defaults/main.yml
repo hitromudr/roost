@@ -1,0 +1,34 @@
+---
+# Group the agent runs under. Every firewall rule matches on its gid, so the
+# policy follows the process rather than a port or a destination.
+egress_sandbox_group: agent-sandbox
+
+# pinned   — loopback only; the agent reaches the internet through a local
+#            proxy that is itself outside the sandbox, so its exit address
+#            stays the same wherever the machine is.
+# proxied  — the same, plus the destinations listed in _allow.
+# direct   — no restrictions. Present so that "unrestricted" is a choice
+#            somebody made, not the result of skipping configuration.
+egress_sandbox_profile: pinned
+
+# Destinations for the proxied profile: addresses or CIDRs. Anything with a
+# colon is treated as IPv6.
+egress_sandbox_allow: []
+
+# Accounts to add to the group. They keep their primary group; membership
+# only matters for processes started through agent-run.
+egress_sandbox_users: []
+
+# The agent itself. Anything that speaks a terminal works — the sandbox does
+# not care what it is.
+egress_sandbox_agent_command: /usr/local/bin/claude
+
+# Credentials live in a file with 0600 permissions, not in the playbook and
+# not in the wrapper. Leave _proxy_url empty and the role writes a template
+# you fill in by hand; set it (from a vault, or --extra-vars) and the role
+# writes it for you.
+egress_sandbox_env_file: /etc/roost/agent-proxy.env
+egress_sandbox_proxy_url: ""
+
+egress_sandbox_wrapper: /usr/local/bin/agent-run
+egress_sandbox_firewall_bin: /usr/local/sbin/egress-firewall

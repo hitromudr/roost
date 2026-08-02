@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# agent-run — start a CLI agent inside the sandbox group.
+#
+# The group is what the firewall policy matches on, so everything the agent
+# spawns inherits the same restrictions. Proxy settings come from an env file
+# with 0600 permissions: credentials do not belong in a script that the whole
+# machine can read.
+#
+#   agent-run [args...]     start the configured agent, passing args through
+#
+# Configuration comes from /etc/roost/agent-run.env (written by the ansible
+# role), and any variable already set in the environment wins over it:
+#   AGENT_GROUP     group to run under
+#   AGENT_COMMAND   the agent binary
+#   AGENT_ENV_FILE  optional file with PROXY_URL and anything else it needs
+set -euo pipefail
+
+CONFIG="${AGENT_CONFIG:-/etc/roost/agent-run.env}"
+if [ -f "$CONFIG" ]; then
+	while IFS='=' read -r key value; do
+		case "$key" in '' | \#*) continue ;; esac
+		# Environment wins: a one-off override should not need the file
+		# edited, and the tests rely on this too.
+		[ -n "${!key:-}" ] || export "$key=$value"
+	done < "$CONFIG"
+fi
+
+GROUP="${AGENT_GROUP:-}"
+COMMAND="${AGENT_COMMAND:-}"
+ENV_FILE="${AGENT_ENV_FILE:-}"
+
+die() { printf 'agent-run: %s\n' "$*" >&2; exit 1; }
+
+[ -n "$GROUP" ]   || die "AGENT_GROUP is not set"
+[ -n "$COMMAND" ] || die "AGENT_COMMAND is not set"
+
+if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
+	# Credentials in a world-readable file are a misconfiguration worth
+	# stopping for: every account on the machine could read the proxy
+	# password, and nobody would notice.
+	perms="$(stat -c '%a' "$ENV_FILE")"
+	case "$perms" in
+		600|400) ;;
+		*) die "$ENV_FILE has permissions $perms — expected 0600, refusing to read credentials from it" ;;
+	esac
+	# shellcheck disable=SC1090
+	. "$ENV_FILE"
+fi
+
+if [ -n "${PROXY_URL:-}" ]; then
+	export HTTPS_PROXY="$PROXY_URL" HTTP_PROXY="$PROXY_URL" ALL_PROXY="$PROXY_URL"
+	export https_proxy="$PROXY_URL" http_proxy="$PROXY_URL" all_proxy="$PROXY_URL"
+	# Without this the agent would try to reach a local service through the
+	# proxy, which the proxy has no route to.
+	export NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1"
+fi
+
+# A hook for the test suite: show what the environment would be, then carry on.
+if [ -n "${AGENT_DEBUG_ENV:-}" ]; then
+	echo "HTTPS_PROXY=${HTTPS_PROXY:-}"
+	echo "NO_PROXY=${NO_PROXY:-}"
+fi
+
+# Quote every argument so a prompt with spaces survives the trip through sg.
+printf -v args '%q ' "$COMMAND" "$@"
+
+restore_terminal() {
+	# A TUI agent that exits badly leaves the terminal in alternate-screen
+	# mode with the cursor hidden. Put it back.
+	printf '\e[?1049l\e[?25h\e[0m'
+	stty sane 2>/dev/null || true
+}
+trap restore_terminal EXIT
+
+sg "$GROUP" -c "$args"
