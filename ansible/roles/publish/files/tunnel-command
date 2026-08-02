@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# tunnel-command — print the autossh command line that publishes the stand.
+#
+# The stand has no routable address, so it dials out: a reverse forward makes
+# its local terminal port appear on the gate's loopback, where nginx picks it
+# up. Printing the command rather than running it keeps the flags testable and
+# lets the unit stay a one-liner.
+#
+# Configuration comes from the environment; the ansible role puts it in the
+# unit file.
+set -euo pipefail
+
+need() {
+	local name="$1"
+	[ -n "${!name:-}" ] || { printf 'tunnel-command: %s is not set\n' "$name" >&2; exit 1; }
+}
+for v in TUNNEL_GATE_HOST TUNNEL_GATE_USER TUNNEL_REMOTE_PORT TUNNEL_LOCAL_PORT TUNNEL_KEY; do
+	need "$v"
+done
+PORT="${TUNNEL_GATE_PORT:-22}"
+
+# -M 0 turns off autossh's own monitoring ports in favour of ssh keepalives,
+#       which is the recommended arrangement and needs no extra ports.
+# ServerAlive* notice a link that died silently — without them the forward
+#       survives as a socket that accepts and discards, and the gate answers
+#       502 while everything looks healthy.
+# ExitOnForwardFailure makes a refused forward fatal, so systemd restarts
+#       instead of leaving a tunnel that carries nothing.
+# -N -T: no command, no tty. This connection is a pipe, not a login.
+printf '%s\n' "autossh -M 0 -N -T \
+-o ServerAliveInterval=30 \
+-o ServerAliveCountMax=3 \
+-o ExitOnForwardFailure=yes \
+-o StrictHostKeyChecking=accept-new \
+-o IdentitiesOnly=yes \
+-i ${TUNNEL_KEY} \
+-p ${PORT} \
+-R ${TUNNEL_REMOTE_PORT}:127.0.0.1:${TUNNEL_LOCAL_PORT} \
+${TUNNEL_GATE_USER}@${TUNNEL_GATE_HOST}"

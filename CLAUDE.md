@@ -29,13 +29,21 @@ Three nodes:
 | gate | public entry point with a routable address | no, if the stand is public |
 | workstation | the machine you work from | yes |
 
-Four ansible roles, driven by the `roost` wrapper:
+Ansible roles:
 
-- `egress_sandbox` — group-based egress policy (`gid-owner` rules) and the
-  `agent-run` launcher. The core of the project.
-- `agent_sessions` — tmux sessions per project, naming, restart policy.
-- `publish` — reverse tunnel to the gate, TLS and authentication in front.
-- `env_sync` — shell/editor config, secrets and agent context across machines.
+- `egress_sandbox` (stand) — group-based egress policy (`gid-owner` rules) and
+  the `agent-run` launcher. The core of the project. **Done.**
+- `publish` (stand) — installs pockterm through its own installer, opens the
+  reverse tunnel to the gate. **Done.**
+- `gate` (gate) — nginx with TLS, client CA and certificates for mutual TLS,
+  the unprivileged account the tunnel logs in as. **Done.**
+- `agent_sessions` (stand) — tmux sessions per project. Planned.
+- `env_sync` — shell/editor config, secrets and agent context across
+  machines. Planned.
+
+Run playbooks from the repository root — `ansible.cfg` there points at
+`ansible/roles`. `make deps` first: the roles need `community.crypto` and
+`ansible.posix`.
 
 ## Conventions
 

@@ -1,0 +1,109 @@
+---
+- name: Install packages the stand needs
+  ansible.builtin.package:
+    name:
+      - git
+      - tmux
+      - autossh
+      # Needed by community.crypto for the tunnel key.
+      - python3-cryptography
+    state: present
+
+# pockterm installs itself — binary, token, unit, all idempotent. Reproducing
+# that here would mean two installers disagreeing about the same machine.
+- name: Fetch pockterm
+  ansible.builtin.git:
+    repo: "{{ publish_pockterm_repo }}"
+    dest: "{{ publish_pockterm_dir }}"
+    version: "{{ publish_pockterm_version }}"
+  register: publish_pockterm_checkout
+
+- name: Run pockterm's own installer
+  ansible.builtin.command:
+    cmd: bash deploy/install.sh
+    chdir: "{{ publish_pockterm_dir }}"
+  environment:
+    POCKTERM_LISTEN: "{{ publish_listen }}"
+    POCKTERM_USER: "{{ publish_user | default(ansible_user_id) }}"
+  register: publish_pockterm_install
+  changed_when: "'token generated' in publish_pockterm_install.stdout
+                 or 'unit →' in publish_pockterm_install.stdout"
+
+- name: Read the terminal token
+  ansible.builtin.slurp:
+    src: /etc/pockterm/pockterm.env
+  register: publish_token_file
+  no_log: true
+
+- name: Keep the token for later tasks
+  ansible.builtin.set_fact:
+    publish_token: >-
+      {{ (publish_token_file.content | b64decode)
+         | regex_search('POCKTERM_TOKEN=(\S+)', '\1') | first }}
+  no_log: true
+
+# --- tunnel to the gate ------------------------------------------------
+# Skipped entirely when no gate is configured: a stand with a routable
+# address publishes itself.
+
+- name: Create the roost directory
+  ansible.builtin.file:
+    path: /etc/roost
+    state: directory
+    mode: "0755"
+  when: publish_gate_host | length > 0
+
+- name: Generate the tunnel key
+  community.crypto.openssh_keypair:
+    path: "{{ publish_tunnel_key }}"
+    type: ed25519
+    comment: "roost tunnel {{ inventory_hostname }}"
+    mode: "0600"
+  register: publish_tunnel_keypair
+  when: publish_gate_host | length > 0
+
+- name: Show the public key to authorise on the gate
+  ansible.builtin.debug:
+    msg: >-
+      Authorise this key on the gate as {{ publish_gate_user }}:
+      {{ publish_tunnel_keypair.public_key | default('') }}
+  when:
+    - publish_gate_host | length > 0
+    - publish_tunnel_keypair.changed | default(false)
+
+- name: Install the tunnel command generator
+  ansible.builtin.copy:
+    src: tunnel-command
+    dest: "{{ publish_tunnel_bin }}"
+    mode: "0755"
+  when: publish_gate_host | length > 0
+  notify: Restart tunnel
+
+- name: Install the tunnel unit
+  ansible.builtin.template:
+    src: roost-tunnel.service.j2
+    dest: /etc/systemd/system/roost-tunnel.service
+    mode: "0644"
+  when: publish_gate_host | length > 0
+  notify: Restart tunnel
+
+- name: Enable the tunnel
+  ansible.builtin.systemd_service:
+    name: roost-tunnel
+    enabled: true
+    state: started
+    daemon_reload: true
+  when:
+    - publish_gate_host | length > 0
+    - not ansible_check_mode
+
+- name: Report where the terminal is now reachable
+  ansible.builtin.debug:
+    msg: >-
+      {% if publish_gate_host | length > 0 %}
+      The terminal is on the gate at 127.0.0.1:{{ publish_remote_port }} —
+      point the gate's nginx there.
+      {% else %}
+      The terminal listens on {{ publish_listen }} — put TLS and
+      authentication in front of it before exposing anything.
+      {% endif %}

@@ -7,7 +7,8 @@ test: ## Run bats tests
 		echo "no tests yet"; \
 	fi
 
-test-integration: ## Prove the egress policy in a throwaway container (needs docker)
+test-integration: ## Apply the roles in throwaway containers and check them (needs docker)
 	bash tests/integration/egress_container.sh
+	bash tests/integration/gate_container.sh
 
 check: lint test ## Lint and test

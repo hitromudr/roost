@@ -1,0 +1,158 @@
+---
+- name: Require a domain
+  ansible.builtin.assert:
+    that: gate_domain | length > 0
+    fail_msg: gate_domain must be set — the gate terminates TLS for a name
+    quiet: true
+
+- name: Validate the authentication mode
+  ansible.builtin.assert:
+    that: gate_auth in ['token', 'mtls']
+    fail_msg: "gate_auth is '{{ gate_auth }}'; expected token or mtls"
+    quiet: true
+
+- name: Install nginx and the certificate tooling
+  ansible.builtin.package:
+    name:
+      - nginx
+      # community.crypto does its work through the python library on the
+      # target, not through the openssl binary.
+      - python3-cryptography
+    state: present
+
+# --- the account the tunnel logs in as ---------------------------------
+# A separate unprivileged user with no shell: this login exists to carry a
+# forward, and nothing else.
+
+# HTTP/2 moved from a `listen` flag to its own directive in 1.25.1, and the
+# old form is a fatal error on new nginx just as the new one is on old. The
+# version decides which the template writes.
+- name: Read the nginx version
+  ansible.builtin.command: nginx -v
+  changed_when: false
+  register: gate_nginx_raw
+  when: not ansible_check_mode
+
+- name: Note the nginx version
+  ansible.builtin.set_fact:
+    gate_nginx_version: >-
+      {{ (gate_nginx_raw.stderr | default('') | regex_search('nginx/([0-9.]+)', '\1') | first)
+         if (gate_nginx_raw.stderr | default('') | regex_search('nginx/[0-9.]+'))
+         else '1.22.0' }}
+
+- name: Create the tunnel account
+  ansible.builtin.user:
+    name: "{{ gate_tunnel_user }}"
+    shell: /usr/sbin/nologin
+    create_home: true
+    system: true
+
+- name: Authorise the stands
+  ansible.posix.authorized_key:
+    user: "{{ gate_tunnel_user }}"
+    key: "{{ item }}"
+    # The key may only forward: no command, no agent, no tty, no X11.
+    key_options: 'restrict,port-forwarding'
+    state: present
+  loop: "{{ gate_tunnel_keys }}"
+
+# --- client certificate authority --------------------------------------
+
+- name: Create the CA directory
+  ansible.builtin.file:
+    path: "{{ gate_ca_dir }}"
+    state: directory
+    mode: "0700"
+  when: gate_auth == 'mtls'
+
+- name: Generate the CA key
+  community.crypto.openssl_privatekey:
+    path: "{{ gate_ca_dir }}/ca.key"
+    size: 4096
+    mode: "0600"
+  when: gate_auth == 'mtls'
+
+- name: Generate the CA certificate
+  community.crypto.x509_certificate:
+    path: "{{ gate_ca_dir }}/ca.crt"
+    privatekey_path: "{{ gate_ca_dir }}/ca.key"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ gate_ca_days }}d"
+    mode: "0644"
+  when: gate_auth == 'mtls'
+
+- name: Generate client keys
+  community.crypto.openssl_privatekey:
+    path: "{{ gate_ca_dir }}/{{ item }}.key"
+    size: 2048
+    mode: "0600"
+  loop: "{{ gate_clients }}"
+  when: gate_auth == 'mtls'
+
+- name: Generate client signing requests
+  community.crypto.openssl_csr:
+    path: "{{ gate_ca_dir }}/{{ item }}.csr"
+    privatekey_path: "{{ gate_ca_dir }}/{{ item }}.key"
+    common_name: "{{ item }}"
+    mode: "0600"
+  loop: "{{ gate_clients }}"
+  when: gate_auth == 'mtls'
+
+- name: Sign the client certificates
+  community.crypto.x509_certificate:
+    path: "{{ gate_ca_dir }}/{{ item }}.crt"
+    csr_path: "{{ gate_ca_dir }}/{{ item }}.csr"
+    provider: ownca
+    ownca_path: "{{ gate_ca_dir }}/ca.crt"
+    ownca_privatekey_path: "{{ gate_ca_dir }}/ca.key"
+    ownca_not_after: "+{{ gate_client_days }}d"
+    mode: "0644"
+  loop: "{{ gate_clients }}"
+  when: gate_auth == 'mtls'
+
+# A phone cannot install a .crt and a .key separately — it wants one bundle.
+- name: Bundle client certificates for phones
+  community.crypto.openssl_pkcs12:
+    action: export
+    path: "{{ gate_ca_dir }}/{{ item }}.p12"
+    friendly_name: "{{ item }}"
+    privatekey_path: "{{ gate_ca_dir }}/{{ item }}.key"
+    certificate_path: "{{ gate_ca_dir }}/{{ item }}.crt"
+    other_certificates: "{{ gate_ca_dir }}/ca.crt"
+    mode: "0600"
+  loop: "{{ gate_clients }}"
+  when: gate_auth == 'mtls'
+
+# --- the vhost ----------------------------------------------------------
+
+- name: Install the vhost
+  ansible.builtin.template:
+    src: pockterm.conf.j2
+    dest: /etc/nginx/sites-available/roost-{{ gate_domain }}.conf
+    mode: "0644"
+  notify:
+    - Reload nginx
+    - Reload nginx without systemd
+
+- name: Enable the vhost
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/roost-{{ gate_domain }}.conf
+    dest: /etc/nginx/sites-enabled/roost-{{ gate_domain }}.conf
+    state: link
+  notify:
+    - Reload nginx
+    - Reload nginx without systemd
+
+# A broken config that nginx never loads is worse than a loud failure here.
+- name: Check the nginx configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Tell the operator how to get the client certificate onto the phone
+  ansible.builtin.debug:
+    msg: >-
+      Client bundles are in {{ gate_ca_dir }}/*.p12 (0600). Move one to the
+      phone over a channel you trust, install it, then open
+      https://{{ gate_domain }}/
+  when: gate_auth == 'mtls'
