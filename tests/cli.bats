@@ -86,3 +86,47 @@ EOF
     STUB_RC=1 run "$ROOST" doctor
     [[ "$output" == *"roost install"* ]]
 }
+
+@test "uninstall says what goes and what stays before doing anything" {
+    write_conf "" "" mtls
+    run "$ROOST" uninstall --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"egress rules"* ]]
+    [[ "$output" == *"keeps"* ]]
+    [[ "$output" == *"projects"* ]]
+    # A dry run must not touch the machine.
+    ! grep -q "ansible-playbook" "$STUB_LOG"
+}
+
+@test "uninstall without --purge keeps the group and the token" {
+    write_conf "" "" mtls
+    run "$ROOST" uninstall --dry-run
+    [[ "$output" == *"sandbox group"* ]]
+    [[ "$output" == *"--purge"* ]]
+}
+
+@test "uninstall --yes proceeds without asking" {
+    write_conf "" "" mtls
+    run "$ROOST" uninstall --yes
+    [ "$status" -eq 0 ]
+    grep -q "teardown.yml" "$STUB_LOG"
+}
+
+@test "uninstall --purge passes the flag through" {
+    write_conf "" "" mtls
+    run "$ROOST" uninstall --yes --purge
+    grep -q "roost_purge=true" "$STUB_LOG"
+}
+
+@test "an unknown uninstall option is refused" {
+    write_conf "" "" mtls
+    run "$ROOST" uninstall --wipe-everything
+    [ "$status" -ne 0 ]
+}
+
+@test "gate remove runs the teardown playbook" {
+    write_conf gate.example cc.example mtls
+    run "$ROOST" gate remove admin@gate.example
+    [ "$status" -eq 0 ]
+    grep -q "gate-teardown.yml" "$STUB_LOG"
+}

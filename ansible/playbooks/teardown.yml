@@ -1,0 +1,119 @@
+---
+# Removes roost from a stand.
+#
+#   ansible-playbook -i ansible/inventory ansible/playbooks/teardown.yml --check
+#
+# What goes: the egress rules and their unit, the launcher and session helper,
+# the tunnel, the web terminal, and roost's own configuration directory.
+#
+# What stays, unless you pass -e roost_purge=true: your projects, your tmux
+# sessions, the sandbox group, and the terminal's token file. Those either
+# hold your work or are annoying to recreate; removing them by default would
+# make "let me try this" a decision with consequences.
+- name: Remove roost from the stand
+  hosts: stand
+  become: true
+  vars:
+    roost_purge: false
+    egress_sandbox_group: agent-sandbox
+    agent_sessions_prefix: roost-
+    publish_pockterm_dir: /opt/pockterm
+  tasks:
+    - name: Stop and disable the services
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      failed_when: false
+      loop:
+        - egress-firewall
+        - roost-tunnel
+        - pockterm
+      when: not ansible_check_mode
+
+    # Rules live in the kernel: stopping the unit is not enough if it was
+    # never started by systemd in this boot.
+    - name: Clear the egress rules
+      ansible.builtin.command: /usr/local/sbin/egress-firewall clear
+      environment:
+        EGRESS_GROUP: "{{ egress_sandbox_group }}"
+        EGRESS_PROFILE: pinned
+        EGRESS_GID: "0"
+      failed_when: false
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: Remove the units
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop:
+        - egress-firewall.service
+        - roost-tunnel.service
+        - pockterm.service
+
+    - name: Remove the commands
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/sbin/egress-firewall
+        - /usr/local/sbin/tunnel-command
+        - /usr/local/bin/agent-run
+        - /usr/local/bin/roost-session
+        - /usr/local/bin/pockterm
+        - /etc/profile.d/roost-session.sh
+
+    - name: Remove the checkout of the web terminal
+      ansible.builtin.file:
+        path: "{{ publish_pockterm_dir }}"
+        state: absent
+
+    - name: Remove roost's configuration
+      ansible.builtin.file:
+        path: /etc/roost
+        state: absent
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: not ansible_check_mode
+
+    # --- only with roost_purge ---------------------------------------
+
+    - name: Remove the terminal token and its directory
+      ansible.builtin.file:
+        path: /etc/pockterm
+        state: absent
+      when: roost_purge | bool
+
+    - name: Remove the sandbox group
+      ansible.builtin.group:
+        name: "{{ egress_sandbox_group }}"
+        state: absent
+      when: roost_purge | bool
+
+    - name: List sessions that are still running
+      ansible.builtin.command: tmux list-sessions -F '#{session_name}'
+      register: roost_sessions
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: Say what was left alone
+      ansible.builtin.debug:
+        msg:
+          - Removed roost from this machine.
+          - "Still yours: projects, and {{ roost_left_sessions | length }}
+             running session(s) — end them with tmux kill-session."
+      vars:
+        roost_left_sessions: >-
+          {{ roost_sessions.stdout_lines | default([])
+             | select('match', agent_sessions_prefix) | list }}
+
+    - name: Mention what --purge would also remove
+      ansible.builtin.debug:
+        msg: >-
+          Kept: the {{ egress_sandbox_group }} group and /etc/pockterm.
+          Pass -e roost_purge=true to remove those too.
+      when: not (roost_purge | bool)

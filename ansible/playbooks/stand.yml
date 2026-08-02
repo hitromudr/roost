@@ -12,3 +12,4 @@
     - egress_sandbox
     - agent_sessions
     - publish
+    - env_sync
