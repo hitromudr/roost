@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# roost-session — the tmux sessions agents live in.
+#
+#   roost-session start <project>    create the session if it is not there
+#   roost-session attach <project>   attach to it
+#   roost-session list               show roost sessions
+#   roost-session kill <project>     end it
+#
+# Sessions are plain tmux with a name prefix, deliberately: anything that
+# speaks tmux — including the web terminal — works with them, and none of this
+# is hidden behind a daemon of ours.
+#
+#   ROOST_PROJECT_DIR  where projects live (default /home/<user>/work)
+#   ROOST_AGENT        the launcher, normally agent-run from egress_sandbox
+#   ROOST_PREFIX       session name prefix (default "roost-")
+set -euo pipefail
+
+PROJECT_DIR="${ROOST_PROJECT_DIR:-$HOME/work}"
+AGENT="${ROOST_AGENT:-/usr/local/bin/agent-run}"
+PREFIX="${ROOST_PREFIX:-roost-}"
+
+die() { printf 'roost-session: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+	cat >&2 <<EOF
+usage: roost-session {start|attach|list|kill} [project]
+EOF
+	exit 1
+}
+
+session_name() { printf '%s%s' "$PREFIX" "$1"; }
+
+need_project() {
+	[ -n "${1:-}" ] || die "which project? (see: ls $PROJECT_DIR)"
+	# Refusing an unknown name rather than creating a session in a directory
+	# that does not exist: a typo should not leave a stray agent running in
+	# $HOME.
+	[ -d "$PROJECT_DIR/$1" ] || die "no project '$1' in $PROJECT_DIR"
+}
+
+cmd_start() {
+	need_project "${1:-}"
+	local name; name="$(session_name "$1")"
+	if tmux has-session -t "$name" 2>/dev/null; then
+		echo "$name is already running"
+		return 0
+	fi
+	tmux new-session -d -s "$name" -c "$PROJECT_DIR/$1" "$AGENT"
+	echo "started $name"
+}
+
+cmd_attach() {
+	need_project "${1:-}"
+	local name; name="$(session_name "$1")"
+	tmux has-session -t "$name" 2>/dev/null || die "$name is not running (start it first)"
+	tmux attach -t "$name"
+}
+
+cmd_list() {
+	tmux list-sessions -F '#{session_name}' 2>/dev/null | grep "^$PREFIX" || {
+		echo "no roost sessions"
+		return 0
+	}
+}
+
+cmd_kill() {
+	need_project "${1:-}"
+	local name; name="$(session_name "$1")"
+	tmux kill-session -t "$name"
+	echo "killed $name"
+}
+
+case "${1:-}" in
+	start)  shift; cmd_start "$@" ;;
+	attach) shift; cmd_attach "$@" ;;
+	list)   shift; cmd_list "$@" ;;
+	kill)   shift; cmd_kill "$@" ;;
+	*)      usage ;;
+esac

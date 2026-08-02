@@ -10,3 +10,5 @@
   become: true
   roles:
     - egress_sandbox
+    - agent_sessions
+    - publish

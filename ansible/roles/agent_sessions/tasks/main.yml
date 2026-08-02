@@ -1,0 +1,40 @@
+---
+- name: Install tmux
+  ansible.builtin.package:
+    name: tmux
+    state: present
+
+- name: Install the session helper
+  ansible.builtin.copy:
+    src: roost-session
+    dest: "{{ agent_sessions_bin }}"
+    mode: "0755"
+
+# Read by roost-session, so the user types `roost-session start x` without
+# exporting anything first.
+- name: Configure the session helper
+  ansible.builtin.template:
+    src: session.env.j2
+    dest: /etc/roost/session.env
+    mode: "0644"
+
+- name: Make the helper pick up its configuration
+  ansible.builtin.copy:
+    content: |
+      # Loaded for interactive shells: roost-session reads its settings here.
+      set -a
+      [ -r /etc/roost/session.env ] && . /etc/roost/session.env
+      set +a
+    dest: /etc/profile.d/roost-session.sh
+    mode: "0644"
+
+# Touch scrolling in the web terminal is tmux mouse mode; without it a swipe
+# does nothing and the history is unreachable from a phone.
+- name: Enable tmux mouse mode for the user
+  ansible.builtin.lineinfile:
+    path: "/home/{{ agent_sessions_user }}/.tmux.conf"
+    line: "set -g mouse on"
+    create: true
+    owner: "{{ agent_sessions_user }}"
+    mode: "0644"
+  when: agent_sessions_tmux_mouse
