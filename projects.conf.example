@@ -1,0 +1,13 @@
+# Projects that belong on this stand: one per line.
+#
+#   <name>  <repository>  [branch]
+#
+# The name is also the directory under project_dir and the tmux session
+# suffix, so `roost-session start isearch` finds it.
+#
+# A project's Claude settings and CLAUDE.md ride inside its own repository —
+# nothing extra to configure here. What does not ride along is anything
+# gitignored, secrets in particular.
+#
+# isearch  https://git.example/hitromudr/isearch.git
+# sorter   https://github.com/hitromudr/sorter.git  develop

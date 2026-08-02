@@ -1,0 +1,101 @@
+---
+# Passed as `-e projects_list=[...]`, ansible hands this over as a string and
+# only converts it when a loop iterates it — so `| length` counts characters
+# and the summary claims 91 projects. Normalise once, up front.
+- name: Normalise the project list
+  ansible.builtin.set_fact:
+    projects_list: >-
+      {{ projects_list | from_json if projects_list is string else projects_list }}
+
+- name: Install git
+  ansible.builtin.package:
+    name: git
+    state: present
+
+- name: Ensure the projects directory exists
+  ansible.builtin.file:
+    path: "{{ projects_dir }}"
+    state: directory
+    owner: "{{ projects_user }}"
+    mode: "0755"
+
+# Asked before touching anything: a repository with uncommitted changes is
+# skipped rather than updated, and silently skipping would be worse than not
+# trying at all.
+# The git module can check out, pull and reset, but it cannot answer "is
+# there uncommitted work here" without touching the tree — which is the one
+# thing this task must not do.
+- name: Look for uncommitted work # noqa: command-instead-of-module
+  become: true
+  become_user: "{{ projects_user }}"
+  ansible.builtin.command:
+    cmd: git status --porcelain
+    chdir: "{{ projects_dir }}/{{ item.name }}"
+  loop: "{{ projects_list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: projects_dirty
+  changed_when: false
+  failed_when: false
+
+- name: Name the projects that will not be touched
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}: {{ item.stdout_lines | length }} uncommitted
+      change(s) — left alone. Commit or stash them, then run again.
+  loop: "{{ projects_dirty.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - item.rc | default(1) == 0
+    - item.stdout | default('') | length > 0
+    - not projects_force
+
+- name: Clone or update the projects
+  become: true
+  become_user: "{{ projects_user }}"
+  ansible.builtin.git:
+    repo: "{{ item.item.repo }}"
+    dest: "{{ projects_dir }}/{{ item.item.name }}"
+    version: "{{ item.item.version if item.item.version != 'HEAD' else omit }}"
+    # force: false makes git refuse rather than overwrite; combined with the
+    # skip below, a dirty checkout is never disturbed.
+    force: "{{ projects_force }}"
+    update: true
+  loop: "{{ projects_dirty.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: projects_force or item.stdout | default('') | length == 0
+  register: projects_checkout
+
+# A project's Claude settings and CLAUDE.md live inside its repository, so
+# they arrive with the code. What does not arrive is anything gitignored —
+# usually the secrets it needs to run at all, and finding that out half an
+# hour later, through the agent, is the worst way to learn it.
+- name: Look for a secrets file the project expects
+  ansible.builtin.stat:
+    path: "{{ projects_dir }}/{{ item.name }}/{{ secrets_name }}"
+  vars:
+    secrets_name: .env
+  loop: "{{ projects_list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: projects_env
+
+- name: Say which projects arrived without their secrets
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}: no .env here. If the project needs one, put it in
+      your secrets repository — it is not in git and did not come with the code.
+  loop: "{{ projects_env.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - not item.stat.exists
+    - (projects_dir + '/' + item.item.name + '/.env.example') is exists
+
+- name: Report what is on the stand now
+  ansible.builtin.debug:
+    msg: >-
+      {{ projects_list | length }} project(s) configured; start one with
+      `roost-session start <name>`

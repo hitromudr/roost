@@ -152,3 +152,74 @@ EOF
     run "$ROOST" install
     grep -q "publish_token=true" "$STUB_LOG"
 }
+
+# --- project list -------------------------------------------------------
+
+write_projects() {
+    printf '%s\n' \
+        '# name  repository  [branch]' \
+        'isearch  https://git.example/isearch.git' \
+        'sorter   https://github.com/x/sorter.git  develop' \
+        > "$BATS_TEST_TMPDIR/projects.conf"
+    export ROOST_PROJECTS="$BATS_TEST_TMPDIR/projects.conf"
+}
+
+@test "the project list is parsed into name, repo and branch" {
+    write_conf "" "" mtls
+    write_projects
+    run "$ROOST" projects --list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"name":"isearch"'* ]]
+    [[ "$output" == *'"repo":"https://git.example/isearch.git"'* ]]
+    [[ "$output" == *'"version":"develop"'* ]]
+}
+
+@test "a project without a branch tracks the repository head" {
+    write_conf "" "" mtls
+    write_projects
+    run "$ROOST" projects --list
+    [[ "$output" == *'"name":"isearch","repo":"https://git.example/isearch.git","version":"HEAD"'* ]]
+}
+
+@test "comments and blank lines are ignored" {
+    write_conf "" "" mtls
+    write_projects
+    run "$ROOST" projects --list
+    [ "$(grep -o '"name"' <<< "$output" | wc -l)" -eq 2 ]
+}
+
+@test "a malformed line is refused, naming the line" {
+    write_conf "" "" mtls
+    printf 'brokenline\n' > "$BATS_TEST_TMPDIR/projects.conf"
+    export ROOST_PROJECTS="$BATS_TEST_TMPDIR/projects.conf"
+    run "$ROOST" projects --list
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"brokenline"* ]]
+}
+
+@test "no project list is not an error, just nothing to do" {
+    write_conf "" "" mtls
+    export ROOST_PROJECTS="$BATS_TEST_TMPDIR/absent.conf"
+    run "$ROOST" projects
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no projects"* ]]
+    ! grep -q "projects.yml" "$STUB_LOG"
+}
+
+@test "projects runs the playbook with the parsed list" {
+    write_conf "" "" mtls
+    write_projects
+    run "$ROOST" projects
+    [ "$status" -eq 0 ]
+    grep -q "projects.yml" "$STUB_LOG"
+    grep -q "isearch" "$STUB_LOG"
+}
+
+@test "the list reaches ansible as json, not as a string" {
+    # Passed as key=value it arrives as a string, and `| length` then counts
+    # characters — the summary claimed 91 projects for one.
+    write_conf "" "" mtls
+    write_projects
+    run "$ROOST" projects
+    grep -q '{"projects_list":' "$STUB_LOG"
+}

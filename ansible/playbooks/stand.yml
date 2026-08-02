@@ -5,11 +5,19 @@
 #
 # Start with --check. The egress policy decides what the agent can reach, and
 # a surprise there is a surprise about your agent's network access.
+#
+# Roles are tagged so a machine that already has a web terminal of its own can
+# skip that part: --skip-tags publish. Two systems managing one unit is how
+# you get a service that works until the other one runs.
 - name: Configure the agent stand
   hosts: stand
   become: true
   roles:
-    - egress_sandbox
-    - agent_sessions
-    - publish
-    - env_sync
+    - role: egress_sandbox
+      tags: [egress]
+    - role: agent_sessions
+      tags: [sessions]
+    - role: publish
+      tags: [publish]
+    - role: env_sync
+      tags: [env]
