@@ -16,6 +16,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF="${ROOST_CONF:-$ROOT/roost.conf}"
+PROXY_ENV="${ROOST_PROXY_ENV:-/etc/roost/agent-proxy.env}"
 
 log()  { printf '\033[1;34m[roost]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m  ✓\033[0m %s\n' "$*"; }
@@ -257,6 +258,18 @@ cmd_doctor() {
 		else
 			bad "egress policy is not active — the agent has unrestricted network access"
 			echo "      fix: roost install"
+			failed=1
+		fi
+
+		# The mirror image of the check above, and the one that actually bit:
+		# a policy with nothing on the other side leaves the agent with no
+		# network, and it dies on its first request.
+		if grep -qs '^PROXY_URL=..*' "$PROXY_ENV"; then
+			ok "the sandbox has a proxy to reach the internet through"
+		else
+			bad "no PROXY_URL in $PROXY_ENV — the agent has no network at all"
+			echo "      fix: put PROXY_URL=http://user:password@host:port there (0640,"
+			echo "           owned by the agent's account), then: systemctl restart"
 			failed=1
 		fi
 	fi
