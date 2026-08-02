@@ -8,11 +8,38 @@ where agents (Claude Code and any other CLI) live in tmux sessions. Their
 outbound traffic is confined to a group with a predictable exit, and you reach
 them from your phone through a web terminal.
 
-> **Status: work in progress.** The first role is done — `egress_sandbox`
-> (confining the agent's outbound traffic), usable on its own:
-> `ansible/roles/egress_sandbox/README.md`. The rest — outside access,
-> sessions, synchronisation — is still design only
-> (`docs/superpowers/specs/`). There is no full installer yet.
+> **Status: work in progress.** Traffic confinement, publishing, sessions and
+> the `roost` wrapper work. Environment synchronisation between machines
+> (`env_sync`) is not written, and a complete stand has not been exercised on
+> real hardware yet — the roles are verified in containers and by dry runs.
+
+## Quick start
+
+```bash
+git clone https://github.com/<owner>/roost && cd roost
+./roost setup      # a few questions; answers go to roost.conf
+./roost install    # apply to this machine
+./roost doctor     # check the stand is what it claims to be
+```
+
+If the stand is behind NAT, you also need a machine with a routable address:
+
+```bash
+./roost gate add user@vps.example   # nginx, TLS, client certificates
+./roost qr                          # QR with the link for your phone
+```
+
+## What the roles do
+
+| Role | Where | What |
+|---|---|---|
+| `egress_sandbox` | stand | the group, `gid-owner` rules, the agent launcher |
+| `agent_sessions` | stand | tmux sessions per project, mouse mode for phones |
+| `publish` | stand | the web terminal via its own installer, reverse tunnel |
+| `gate` | public entry | nginx with TLS, client CA, the tunnel account |
+
+Run playbooks from the repository root — `ansible.cfg` there points at
+`ansible/roles`. Run `make deps` before the first time.
 
 ## Why
 
