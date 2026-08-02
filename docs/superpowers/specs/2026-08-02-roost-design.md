@@ -67,6 +67,18 @@ terminal ([pockterm](https://github.com/hitromudr/pockterm)) on the stand.
 Two authentication levels: a shared token to get started, mutual TLS for a
 setup you keep. The installer refuses to publish without one of them.
 
+**Division of labour with pockterm.** pockterm installs itself: it ships
+`deploy/install.sh` (binary, token, systemd unit — idempotent), nginx examples
+for both authentication levels, and `pockterm qr` to hand the link to a phone.
+roost does not reimplement any of that. This role invokes pockterm's own
+installer, then adds what only makes sense one level up: the tunnel from stand
+to gate, the gate's nginx configuration derived from the roost config, and the
+certificate authority when the chosen level is mutual TLS.
+
+The rule for anything else that gets built: if it is useful to somebody who
+only wants a web terminal, it belongs in pockterm; if it only makes sense as
+part of a stand, it belongs here.
+
 ### `env_sync`
 
 A skeleton for a personal environment repository — shell and editor config,
