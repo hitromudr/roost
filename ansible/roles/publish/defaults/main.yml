@@ -6,6 +6,13 @@ publish_pockterm_repo: https://github.com/hitromudr/pockterm
 publish_pockterm_version: main
 publish_pockterm_dir: /opt/pockterm
 
+# A stand is often a single-board computer with no go toolchain, and putting
+# one there to build a 9 MB binary is the wrong trade. Point this at a binary
+# built for the stand's architecture on your own machine
+# (`make build-arm64` in the pockterm checkout) and the role ships it instead
+# of compiling on the target.
+publish_pockterm_binary: ""
+
 # The terminal listens here. Loopback only — everything from outside arrives
 # through the gate.
 publish_listen: 127.0.0.1:8130

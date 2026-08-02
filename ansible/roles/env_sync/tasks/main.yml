@@ -1,62 +1,63 @@
 ---
-- name: Skip when no environment repository is configured
-  ansible.builtin.meta: end_role
-  when: env_sync_repo | length == 0
+# Everything here is guarded by one condition rather than `meta: end_role`,
+# which needs ansible-core 2.17 while the current Ubuntu LTS ships 2.16.
+- name: Sync the environment
+  when: env_sync_repo | length > 0
+  block:
+    - name: Install git
+      ansible.builtin.package:
+        name: git
+        state: present
 
-- name: Install git
-  ansible.builtin.package:
-    name: git
-    state: present
+    - name: Check out the environment repository
+      become: true
+      become_user: "{{ env_sync_user }}"
+      ansible.builtin.git:
+        repo: "{{ env_sync_repo }}"
+        dest: "{{ env_sync_dir }}"
+        version: "{{ env_sync_version }}"
+        # Local edits are the user's, not ours to discard.
+        update: true
+        force: false
+      register: env_sync_checkout
 
-- name: Check out the environment repository
-  become: true
-  become_user: "{{ env_sync_user }}"
-  ansible.builtin.git:
-    repo: "{{ env_sync_repo }}"
-    dest: "{{ env_sync_dir }}"
-    version: "{{ env_sync_version }}"
-    # Local edits are the user's, not ours to discard.
-    update: true
-    force: false
-  register: env_sync_checkout
+    # A key that is absent leaves every secret encrypted while the installer
+    # reports success — worth stopping for, because the failure is silent.
+    - name: Check the age key is present
+      ansible.builtin.stat:
+        path: "{{ env_sync_age_key }}"
+      register: env_sync_key
+      when: env_sync_expect_age_key
 
-# A key that is absent leaves every secret encrypted while the installer
-# reports success — worth stopping for, because the failure is silent.
-- name: Check the age key is present
-  ansible.builtin.stat:
-    path: "{{ env_sync_age_key }}"
-  register: env_sync_key
-  when: env_sync_expect_age_key
+    - name: Fail when the age key is missing
+      ansible.builtin.assert:
+        that: env_sync_key.stat.exists
+        fail_msg: >-
+          {{ env_sync_age_key }} is missing, so encrypted secrets will not
+          decrypt. Move the key here by hand — that step cannot be automated,
+          since automating it would mean guarding the key with a secret kept on
+          the same machine.
+        quiet: true
+      when: env_sync_expect_age_key
 
-- name: Fail when the age key is missing
-  ansible.builtin.assert:
-    that: env_sync_key.stat.exists
-    fail_msg: >-
-      {{ env_sync_age_key }} is missing, so encrypted secrets will not
-      decrypt. Move the key here by hand — that step cannot be automated,
-      since automating it would mean guarding the key with a secret kept on
-      the same machine.
-    quiet: true
-  when: env_sync_expect_age_key
+    - name: Check the age key is not readable by others
+      ansible.builtin.file:
+        path: "{{ env_sync_age_key }}"
+        mode: "0600"
+      when:
+        - env_sync_expect_age_key
+        - env_sync_key.stat.exists | default(false)
 
-- name: Check the age key is not readable by others
-  ansible.builtin.file:
-    path: "{{ env_sync_age_key }}"
-    mode: "0600"
-  when:
-    - env_sync_expect_age_key
-    - env_sync_key.stat.exists | default(false)
-
-- name: Run the environment installer
-  become: true
-  become_user: "{{ env_sync_user }}"
-  ansible.builtin.command:
-    cmd: "{{ env_sync_install_cmd }}"
-    chdir: "{{ env_sync_dir }}"
-  register: env_sync_install
-  # The installers this is meant for are idempotent and report what they did;
-  # ansible cannot tell, so changes are reported only when the checkout moved.
-  changed_when: env_sync_checkout.changed
-  when:
-    - env_sync_install_cmd | length > 0
-    - not ansible_check_mode
+    - name: Run the environment installer
+      become: true
+      become_user: "{{ env_sync_user }}"
+      ansible.builtin.command:
+        cmd: "{{ env_sync_install_cmd }}"
+        chdir: "{{ env_sync_dir }}"
+      register: env_sync_install
+      # The installers this is meant for are idempotent and report what they did;
+      # ansible cannot tell, so changes are reported only when the checkout moved.
+      changed_when: env_sync_checkout.changed
+      when:
+        - env_sync_install_cmd | length > 0
+        - not ansible_check_mode

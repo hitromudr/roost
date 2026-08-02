@@ -18,6 +18,26 @@
     version: "{{ publish_pockterm_version }}"
   register: publish_pockterm_checkout
 
+# Its installer prefers a prebuilt binary when there is no toolchain, so
+# dropping one in the checkout is all it takes.
+- name: Make room for the prebuilt binary
+  ansible.builtin.file:
+    path: "{{ publish_pockterm_dir }}/bin"
+    state: directory
+    mode: "0755"
+  when:
+    - publish_pockterm_binary | length > 0
+    - not ansible_check_mode
+
+- name: Ship a prebuilt terminal binary
+  ansible.builtin.copy:
+    src: "{{ publish_pockterm_binary }}"
+    dest: "{{ publish_pockterm_dir }}/bin/pockterm"
+    mode: "0755"
+  when:
+    - publish_pockterm_binary | length > 0
+    - not ansible_check_mode
+
 # Skipped under --check: the checkout above does not happen in that mode, so
 # this would fail on a missing directory rather than on anything real.
 - name: Run pockterm's own installer
