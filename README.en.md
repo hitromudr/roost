@@ -8,8 +8,11 @@ where agents (Claude Code and any other CLI) live in tmux sessions. Their
 outbound traffic is confined to a group with a predictable exit, and you reach
 them from your phone through a web terminal.
 
-> **Status: design.** The design lives in `docs/superpowers/specs/`; there is
-> no code yet. Do not install.
+> **Status: work in progress.** The first role is done — `egress_sandbox`
+> (confining the agent's outbound traffic), usable on its own:
+> `ansible/roles/egress_sandbox/README.md`. The rest — outside access,
+> sessions, synchronisation — is still design only
+> (`docs/superpowers/specs/`). There is no full installer yet.
 
 ## Why
 

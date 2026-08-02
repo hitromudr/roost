@@ -1,7 +1,8 @@
 # Copy to `ansible/inventory` and edit. Run playbooks from the repository
-# root, where ansible.cfg points at ansible/roles. The stand is the machine agents run on; the
-# gate is the public entry point and is only needed when the stand has no
-# routable address of its own.
+# root, where ansible.cfg points at ansible/roles.
+#
+# The stand is the machine agents run on; the gate is the public entry point,
+# needed only when the stand has no routable address of its own.
 #
 # `stand` can be localhost when you are installing on the machine itself:
 #   stand-1 ansible_connection=local
