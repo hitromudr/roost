@@ -8,10 +8,10 @@ where agents (Claude Code and any other CLI) live in tmux sessions. Their
 outbound traffic is confined to a group with a predictable exit, and you reach
 them from your phone through a web terminal.
 
-> **Status: work in progress.** Traffic confinement, publishing, sessions and
-> the `roost` wrapper work. Environment synchronisation between machines
-> (`env_sync`) is not written, and a complete stand has not been exercised on
-> real hardware yet — the roles are verified in containers and by dry runs.
+> **Status: work in progress.** Every part is written — traffic confinement,
+> publishing, sessions, environment sync, the `roost` wrapper and teardown.
+> They are verified in containers and by dry runs; a complete stand, from a
+> clean machine to a phone, has not been built end to end yet.
 
 ## Quick start
 
