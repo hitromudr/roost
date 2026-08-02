@@ -1,0 +1,12 @@
+---
+# Puts the projects listed in projects.conf on the stand.
+#
+#   ./roost projects
+#
+# Uncommitted work is never overwritten: a stand accumulates it, and losing
+# it is worse than an out-of-date checkout.
+- name: Deploy projects to the stand
+  hosts: stand
+  become: true
+  roles:
+    - projects

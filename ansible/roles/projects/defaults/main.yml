@@ -1,0 +1,14 @@
+---
+# Projects to put on the stand: a list of {name, repo, version}. The roost
+# wrapper builds it from projects.conf; version "HEAD" means the repository's
+# default branch.
+projects_list: []
+
+projects_user: "{{ ansible_user_id }}"
+projects_dir: "/home/{{ projects_user }}/work"
+
+# Never discard local work. A stand accumulates uncommitted changes — an
+# agent edits files there and does not always commit — and a checkout that
+# resets would destroy exactly the work you came for. Existing repositories
+# with modifications are reported and left alone.
+projects_force: false
