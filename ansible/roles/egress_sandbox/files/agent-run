@@ -40,9 +40,13 @@ if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
 	# password, and nobody would notice.
 	perms="$(stat -c '%a' "$ENV_FILE")"
 	case "$perms" in
-		600|400) ;;
-		*) die "$ENV_FILE has permissions $perms — expected 0600, refusing to read credentials from it" ;;
+		# 640 is the normal case: root owns it, the sandbox group reads it.
+		# Anything world-readable is a misconfiguration worth stopping for.
+		600|640|400|440) ;;
+		*) die "$ENV_FILE has permissions $perms — expected 0600 or 0640, refusing to read credentials from it" ;;
 	esac
+	[ -r "$ENV_FILE" ] || die "$ENV_FILE is not readable by $(id -un) — check its group"
+
 	# shellcheck disable=SC1090
 	. "$ENV_FILE"
 fi

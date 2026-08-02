@@ -89,6 +89,15 @@ EOF
     [[ "$output" == *"sg-called"* ]]
 }
 
+@test "accepts a group-readable env file" {
+    cat > "$ENV_FILE" <<EOF
+PROXY_URL=http://user:secret@127.0.0.1:8129
+EOF
+    chmod 640 "$ENV_FILE"
+    run "$SCRIPT"
+    [ "$status" -eq 0 ]
+}
+
 @test "refuses a world-readable env file" {
     cat > "$ENV_FILE" <<'EOF'
 PROXY_URL=http://user:secret@127.0.0.1:8129
