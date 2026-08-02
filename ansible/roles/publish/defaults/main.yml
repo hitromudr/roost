@@ -13,6 +13,13 @@ publish_pockterm_dir: /opt/pockterm
 # of compiling on the target.
 publish_pockterm_binary: ""
 
+# Whether the terminal gets its own shared token. Behind mutual TLS it should
+# not: the certificate already decides who gets in, and a token the gate does
+# not know about answers 401 to every link without it — which in a browser is
+# indistinguishable from a machine with no sessions. The roost wrapper sets
+# this from the chosen authentication level.
+publish_token: true
+
 # The terminal listens here. Loopback only — everything from outside arrives
 # through the gate.
 publish_listen: 127.0.0.1:8130

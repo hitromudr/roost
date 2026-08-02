@@ -47,6 +47,7 @@
   environment:
     POCKTERM_LISTEN: "{{ publish_listen }}"
     POCKTERM_USER: "{{ publish_user | default(ansible_user_id) }}"
+    POCKTERM_NO_TOKEN: "{{ '' if publish_token | bool else '1' }}"
   register: publish_pockterm_install
   changed_when: "'token generated' in publish_pockterm_install.stdout
                  or 'unit →' in publish_pockterm_install.stdout"

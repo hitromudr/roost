@@ -130,3 +130,25 @@ EOF
     [ "$status" -eq 0 ]
     grep -q "gate-teardown.yml" "$STUB_LOG"
 }
+
+@test "mtls install asks pockterm not to generate a token" {
+    # A token the gate does not know about answers 401 to every link without
+    # it, which looks exactly like a machine with no sessions.
+    write_conf gate.example cc.example mtls
+    run "$ROOST" install
+    [ "$status" -eq 0 ]
+    grep -q "publish_token=false" "$STUB_LOG"
+}
+
+@test "token auth keeps the token" {
+    write_conf gate.example cc.example token
+    run "$ROOST" install
+    grep -q "publish_token=true" "$STUB_LOG"
+}
+
+@test "a public stand with no gate keeps the token" {
+    # Nothing in front means the token is the only lock there is.
+    write_conf "" "" mtls
+    run "$ROOST" install
+    grep -q "publish_token=true" "$STUB_LOG"
+}

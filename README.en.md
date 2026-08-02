@@ -38,6 +38,11 @@ If the stand is behind NAT, you also need a machine with a routable address:
 | `publish` | stand | the web terminal via its own installer, reverse tunnel |
 | `gate` | public entry | nginx with TLS, client CA, the tunnel account |
 
+With `auth=mtls` and a gate, the web terminal is installed **without a token
+of its own**: the client certificate is the lock. A token the gate knows
+nothing about would answer `401` to every link without it, which in a browser
+is indistinguishable from a machine with no sessions.
+
 Run playbooks from the repository root — `ansible.cfg` there points at
 `ansible/roles`. Run `make deps` before the first time.
 
