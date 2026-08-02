@@ -1,12 +1,4 @@
 ---
-# Passed as `-e projects_list=[...]`, ansible hands this over as a string and
-# only converts it when a loop iterates it — so `| length` counts characters
-# and the summary claims 91 projects. Normalise once, up front.
-- name: Normalise the project list
-  ansible.builtin.set_fact:
-    projects_list: >-
-      {{ projects_list | from_json if projects_list is string else projects_list }}
-
 - name: Install git
   ansible.builtin.package:
     name: git

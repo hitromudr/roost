@@ -223,3 +223,11 @@ write_projects() {
     run "$ROOST" projects
     grep -q '{"projects_list":' "$STUB_LOG"
 }
+
+@test "the user list reaches ansible as json, not as a string" {
+    # As key=value it arrives as a string and `| first` returns "[", which
+    # ansible then tries to look up as a user account.
+    write_conf "" "" mtls
+    run "$ROOST" install
+    grep -q '{"egress_sandbox_users":' "$STUB_LOG"
+}

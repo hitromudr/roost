@@ -92,10 +92,10 @@ cmd_install() {
 	ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/stand.yml" \
 		-e "egress_sandbox_profile=$egress_profile" \
 		-e "egress_sandbox_agent_command=$agent_command" \
-		-e "egress_sandbox_users=[\"$(id -un)\"]" \
 		-e "agent_sessions_user=$(id -un)" \
 		-e "agent_sessions_project_dir=$project_dir" \
 		-e "publish_gate_host=$gate_host" \
+		-e "{\"egress_sandbox_users\": [\"$(id -un)\"]}" \
 		-e "publish_token=$([ "$auth" = mtls ] && [ -n "$gate_host" ] && echo false || echo true)"
 
 	ok "the stand is configured"

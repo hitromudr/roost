@@ -59,21 +59,43 @@
 
 # Written once as a template when no URL is supplied: overwriting on every run
 # would erase what the operator typed in by hand.
+# Owned by the sandbox group, not by root alone: agent-run reads this as the
+# user, and a file it cannot open makes the launcher fail on its first line —
+# the session then dies the moment tmux starts it, with the reason buried.
 - name: Seed the credentials file
   ansible.builtin.copy:
     content: |
       # Proxy the sandboxed agent reaches the internet through.
       # PROXY_URL=http://user:password@127.0.0.1:8129
     dest: "{{ egress_sandbox_env_file }}"
-    mode: "0600"
+    owner: "{{ egress_sandbox_users | first | default('root') }}"
+    group: "{{ egress_sandbox_group }}"
+    mode: "0640"
     force: false
   when: egress_sandbox_proxy_url | length == 0
+
+# copy with force:false skips an existing file entirely — attributes and all —
+# so ownership is set separately.
+#
+# Owned by the agent's account rather than by root: group membership is fixed
+# when a process starts, so a tmux server running since before this role first
+# ran will never see the new group, and every session it spawns dies on an
+# unreadable file. `sg` still switches the group correctly, because it reads
+# /etc/group rather than the caller's process.
+- name: Keep the credentials file readable by the agent
+  ansible.builtin.file:
+    path: "{{ egress_sandbox_env_file }}"
+    owner: "{{ egress_sandbox_users | first | default('root') }}"
+    group: "{{ egress_sandbox_group }}"
+    mode: "0640"
 
 - name: Write the credentials file
   ansible.builtin.copy:
     content: "PROXY_URL={{ egress_sandbox_proxy_url }}\n"
     dest: "{{ egress_sandbox_env_file }}"
-    mode: "0600"
+    owner: "{{ egress_sandbox_users | first | default('root') }}"
+    group: "{{ egress_sandbox_group }}"
+    mode: "0640"
   when: egress_sandbox_proxy_url | length > 0
   no_log: true
 
