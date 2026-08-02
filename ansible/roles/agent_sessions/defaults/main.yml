@@ -1,0 +1,22 @@
+---
+# Where projects live on the stand. Sessions are named after directories
+# here, and a name that is not one is refused.
+agent_sessions_project_dir: "/home/{{ agent_sessions_user }}/work"
+
+# The account sessions belong to. The web terminal serves this user's tmux,
+# so it has to be the same one.
+agent_sessions_user: "{{ ansible_user_id }}"
+
+# Session name prefix, so roost sessions are distinguishable from the ones
+# you start yourself.
+agent_sessions_prefix: roost-
+
+# Launcher used inside a session — normally agent-run from egress_sandbox, so
+# the agent starts inside its group.
+agent_sessions_agent: /usr/local/bin/agent-run
+
+agent_sessions_bin: /usr/local/bin/roost-session
+
+# tmux options the sessions need. Mouse mode is what makes touch scrolling
+# work in the web terminal.
+agent_sessions_tmux_mouse: true

@@ -18,6 +18,8 @@
     version: "{{ publish_pockterm_version }}"
   register: publish_pockterm_checkout
 
+# Skipped under --check: the checkout above does not happen in that mode, so
+# this would fail on a missing directory rather than on anything real.
 - name: Run pockterm's own installer
   ansible.builtin.command:
     cmd: bash deploy/install.sh
@@ -28,19 +30,7 @@
   register: publish_pockterm_install
   changed_when: "'token generated' in publish_pockterm_install.stdout
                  or 'unit →' in publish_pockterm_install.stdout"
-
-- name: Read the terminal token
-  ansible.builtin.slurp:
-    src: /etc/pockterm/pockterm.env
-  register: publish_token_file
-  no_log: true
-
-- name: Keep the token for later tasks
-  ansible.builtin.set_fact:
-    publish_token: >-
-      {{ (publish_token_file.content | b64decode)
-         | regex_search('POCKTERM_TOKEN=(\S+)', '\1') | first }}
-  no_log: true
+  when: not ansible_check_mode
 
 # --- tunnel to the gate ------------------------------------------------
 # Skipped entirely when no gate is configured: a stand with a routable
