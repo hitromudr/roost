@@ -231,3 +231,29 @@ write_projects() {
     run "$ROOST" install
     grep -q '{"egress_sandbox_users":' "$STUB_LOG"
 }
+
+@test "doctor calls out a sandbox with no way out" {
+    write_conf "" "" mtls
+    export ROOST_PROXY_ENV="$BATS_TEST_TMPDIR/proxy.env"
+    printf '# PROXY_URL=http://user:pass@host:port\n' > "$ROOST_PROXY_ENV"
+    STUB_RC=1 run "$ROOST" doctor
+    # A commented-out example is not a proxy.
+    [[ "$output" == *"no network at all"* ]]
+    [[ "$output" == *"PROXY_URL="* ]]
+}
+
+@test "doctor is satisfied when the proxy is configured" {
+    write_conf "" "" mtls
+    export ROOST_PROXY_ENV="$BATS_TEST_TMPDIR/proxy.env"
+    printf 'PROXY_URL=http://user:pass@127.0.0.1:8129\n' > "$ROOST_PROXY_ENV"
+    STUB_RC=1 run "$ROOST" doctor
+    [[ "$output" == *"has a proxy"* ]]
+}
+
+@test "the direct profile is not nagged about a proxy" {
+    printf 'egress_profile=direct\nauth=mtls\n' > "$ROOST_CONF"
+    export ROOST_PROXY_ENV="$BATS_TEST_TMPDIR/absent.env"
+    STUB_RC=1 run "$ROOST" doctor
+    # Unrestricted egress was the choice; there is nothing to proxy through.
+    [[ "$output" != *"no network at all"* ]]
+}

@@ -99,6 +99,32 @@
   when: egress_sandbox_proxy_url | length > 0
   no_log: true
 
+# A pinned profile with no proxy is not a locked-down agent, it is an agent
+# with no network at all: it rejects direct egress and offers nothing in its
+# place, so the agent dies on its first API call. Worth saying at install
+# time, when the file is right there to fill in.
+- name: Check the sandbox has a way out
+  ansible.builtin.command: grep -c '^PROXY_URL=..*' {{ egress_sandbox_env_file | quote }}
+  register: egress_sandbox_proxy_set
+  changed_when: false
+  failed_when: false
+  when:
+    - egress_sandbox_profile != 'direct'
+    - not ansible_check_mode
+
+- name: Say that the agent currently has no network
+  ansible.builtin.debug:
+    msg: >-
+      Profile '{{ egress_sandbox_profile }}' rejects direct egress, and
+      {{ egress_sandbox_env_file }} has no PROXY_URL — the agent will start
+      with no network at all and fail on its first request. Put the proxy
+      there (PROXY_URL=http://user:password@host:port) and re-run, or choose
+      the 'direct' profile if that is what you meant.
+  when:
+    - egress_sandbox_profile != 'direct'
+    - not ansible_check_mode
+    - (egress_sandbox_proxy_set.stdout | default('0') | trim) == '0'
+
 - name: Install the firewall unit
   ansible.builtin.template:
     src: egress-firewall.service.j2
