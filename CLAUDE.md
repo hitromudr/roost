@@ -37,9 +37,11 @@ Ansible roles:
   reverse tunnel to the gate. **Done.**
 - `gate` (gate) — nginx with TLS, client CA and certificates for mutual TLS,
   the unprivileged account the tunnel logs in as. **Done.**
-- `agent_sessions` (stand) — tmux sessions per project. Planned.
+- `agent_sessions` (stand) — tmux sessions per project. **Done.**
 - `env_sync` — shell/editor config, secrets and agent context across
-  machines. Planned.
+  machines. **Done.**
+- `projects` (stand) — clones the repositories listed in `projects.conf`,
+  skips the ones with uncommitted work. **Done.**
 
 Run playbooks from the repository root — `ansible.cfg` there points at
 `ansible/roles`. `make deps` first: the roles need `community.crypto` and

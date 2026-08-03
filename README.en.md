@@ -10,8 +10,12 @@ them from your phone through a web terminal.
 
 > **Status: work in progress.** Every part is written — traffic confinement,
 > publishing, sessions, environment sync, the `roost` wrapper and teardown.
-> They are verified in containers and by dry runs; a complete stand, from a
-> clean machine to a phone, has not been built end to end yet.
+> The stand has been installed and torn down on real hardware (a Raspberry
+> Pi): the second run is idempotent, the sandbox group and its rules appear,
+> the web terminal answers, and teardown leaves no files and no rules in
+> either address family. The `gate` public entry is verified in a container
+> only, and the whole path from a clean machine to a phone has not been built
+> end to end yet.
 
 ## Quick start
 
