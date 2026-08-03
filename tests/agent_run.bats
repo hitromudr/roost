@@ -29,6 +29,11 @@ EOF
     export AGENT_COMMAND=/usr/bin/true
     # Never read the real machine's configuration during a test.
     export AGENT_CONFIG="$BATS_TEST_TMPDIR/absent.env"
+
+    # The normal state of a stand: a proxy is configured. Tests about its
+    # absence remove or rewrite this file themselves.
+    printf 'PROXY_URL=http://user:secret@127.0.0.1:8129\n' > "$ENV_FILE"
+    chmod 640 "$ENV_FILE"
 }
 
 @test "configuration is read from the config file" {
@@ -84,7 +89,40 @@ EOF
 
 @test "runs without an env file, for the direct profile" {
     rm -f "$ENV_FILE"
+    run env AGENT_PROFILE=direct "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"sg-called"* ]]
+}
+
+@test "refuses to start with no proxy on a profile that needs one" {
+    # The rules would normally stop this agent anyway. "Normally" is not good
+    # enough when one request from an unexpected address costs the account:
+    # two things now have to fail before a packet leaves directly.
+    rm -f "$ENV_FILE"
     run "$SCRIPT"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no PROXY_URL"* ]]
+    [[ "$output" != *"sg-called"* ]]
+}
+
+@test "an env file that lost its PROXY_URL stops the agent" {
+    printf '# someone commented it out\n' > "$ENV_FILE"
+    chmod 640 "$ENV_FILE"
+    run "$SCRIPT"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no PROXY_URL"* ]]
+    [[ "$output" == *"$ENV_FILE"* ]]
+}
+
+@test "the profile comes from the config file too" {
+    cat > "$BATS_TEST_TMPDIR/agent-run.env" <<EOF
+AGENT_GROUP=agent-sandbox
+AGENT_COMMAND=/usr/bin/true
+AGENT_PROFILE=direct
+EOF
+    rm -f "$ENV_FILE"
+    run env -u AGENT_GROUP -u AGENT_COMMAND -u AGENT_ENV_FILE \
+        AGENT_CONFIG="$BATS_TEST_TMPDIR/agent-run.env" "$SCRIPT"
     [ "$status" -eq 0 ]
     [[ "$output" == *"sg-called"* ]]
 }

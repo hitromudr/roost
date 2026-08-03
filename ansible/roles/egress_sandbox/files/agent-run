@@ -28,6 +28,7 @@ fi
 GROUP="${AGENT_GROUP:-}"
 COMMAND="${AGENT_COMMAND:-}"
 ENV_FILE="${AGENT_ENV_FILE:-}"
+PROFILE="${AGENT_PROFILE:-pinned}"
 
 die() { printf 'agent-run: %s\n' "$*" >&2; exit 1; }
 
@@ -49,6 +50,16 @@ if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
 
 	# shellcheck disable=SC1090
 	. "$ENV_FILE"
+fi
+
+# On every profile but `direct` the proxy is the only sanctioned way out, so
+# starting without one is refused rather than attempted. The firewall rules
+# would normally stop such an agent anyway — but "normally" is doing too much
+# work in a sentence about an account that gets banned for one request from an
+# unexpected address. Two independent things now have to fail before a single
+# packet leaves this machine directly: these rules, and this check.
+if [ -z "${PROXY_URL:-}" ] && [ "$PROFILE" != direct ]; then
+	die "no PROXY_URL${ENV_FILE:+ in $ENV_FILE} and the profile is '$PROFILE' — refusing to start the agent with no proxy to go through. Fix the file, or set AGENT_PROFILE=direct if unrestricted egress is what you want."
 fi
 
 if [ -n "${PROXY_URL:-}" ]; then
