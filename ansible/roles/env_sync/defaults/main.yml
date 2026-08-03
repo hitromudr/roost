@@ -6,7 +6,13 @@
 # Empty means the role does nothing, which is the right default: an agent
 # stand is useful without one.
 env_sync_repo: ""
-env_sync_version: main
+
+# "HEAD" follows the repository's own default branch, whatever it is called.
+# Naming one here is for pinning, not for guessing: `main` as a default fails
+# on every repository still on `master`, and the failure arrives during the
+# first install on a new machine.
+env_sync_version: HEAD
+
 env_sync_dir: "/home/{{ env_sync_user }}/work/dotfiles"
 env_sync_user: "{{ ansible_user_id }}"
 
@@ -16,5 +22,14 @@ env_sync_install_cmd: ./install.sh
 # Encrypted secrets, if the repository carries any. The role checks the key
 # is present and refuses to pretend everything is fine when it is not: a
 # missing key means the secrets silently stay encrypted.
-env_sync_expect_age_key: false
+#
+# "auto" asks the checkout itself — a repository carrying sops files needs the
+# key, one carrying none does not. true and false answer for it instead.
+env_sync_expect_age_key: auto
 env_sync_age_key: "/home/{{ env_sync_user }}/.config/sops/age/keys.txt"
+
+# What "auto" counts as an encrypted file.
+env_sync_secret_patterns:
+  - "*.sops.*"
+  - "*.enc.*"
+  - ".sops.yaml"

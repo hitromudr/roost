@@ -4,10 +4,22 @@
 - name: Sync the environment
   when: env_sync_repo | length > 0
   block:
+    # git is normally already there; installing it needs root, and this role
+    # is also useful on a machine you are not root on.
+    - name: Look for git # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: git --version
+      register: env_sync_git
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
     - name: Install git
+      become: true
       ansible.builtin.package:
         name: git
         state: present
+      when: env_sync_git.rc | default(1) != 0
 
     - name: Check out the environment repository
       become: true
@@ -15,11 +27,40 @@
       ansible.builtin.git:
         repo: "{{ env_sync_repo }}"
         dest: "{{ env_sync_dir }}"
-        version: "{{ env_sync_version }}"
+        version: "{{ env_sync_version if env_sync_version != 'HEAD' else omit }}"
         # Local edits are the user's, not ours to discard.
         update: true
         force: false
       register: env_sync_checkout
+
+    # "auto" means the checkout decides: a repository carrying sops files
+    # needs the key, one carrying none does not. Asked after checkout, on the
+    # target, because that is the only place the answer exists.
+    - name: Look for encrypted files in the checkout
+      ansible.builtin.find:
+        paths: "{{ env_sync_dir }}"
+        patterns: "{{ env_sync_secret_patterns }}"
+        recurse: true
+        hidden: true
+        file_type: file
+      register: env_sync_secrets
+      when: env_sync_expect_age_key | string | lower == 'auto'
+
+    - name: Decide whether the age key is required
+      ansible.builtin.set_fact:
+        env_sync_key_required: >-
+          {{ (env_sync_secrets.files | default([]) | length > 0)
+             if (env_sync_expect_age_key | string | lower == 'auto')
+             else (env_sync_expect_age_key | bool) }}
+
+    - name: Say which encrypted files asked for the key
+      ansible.builtin.debug:
+        msg: >-
+          {{ env_sync_secrets.files | length }} encrypted file(s) in
+          {{ env_sync_dir }} — the age key is required.
+      when:
+        - env_sync_expect_age_key | string | lower == 'auto'
+        - env_sync_key_required | bool
 
     # A key that is absent leaves every secret encrypted while the installer
     # reports success — worth stopping for, because the failure is silent.
@@ -27,7 +68,7 @@
       ansible.builtin.stat:
         path: "{{ env_sync_age_key }}"
       register: env_sync_key
-      when: env_sync_expect_age_key
+      when: env_sync_key_required | bool
 
     - name: Fail when the age key is missing
       ansible.builtin.assert:
@@ -38,14 +79,14 @@
           since automating it would mean guarding the key with a secret kept on
           the same machine.
         quiet: true
-      when: env_sync_expect_age_key
+      when: env_sync_key_required | bool
 
     - name: Check the age key is not readable by others
       ansible.builtin.file:
         path: "{{ env_sync_age_key }}"
         mode: "0600"
       when:
-        - env_sync_expect_age_key
+        - env_sync_key_required | bool
         - env_sync_key.stat.exists | default(false)
 
     - name: Run the environment installer

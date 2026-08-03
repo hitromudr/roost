@@ -1,19 +1,75 @@
 ---
+# git is normally already there; installing it needs root, and this role is
+# also useful on a machine you are not root on.
+- name: Look for git # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git --version
+  register: projects_git
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
 - name: Install git
+  become: true
   ansible.builtin.package:
     name: git
     state: present
+  when: projects_git.rc | default(1) != 0
 
 - name: Ensure the projects directory exists
+  become: true
   ansible.builtin.file:
     path: "{{ projects_dir }}"
     state: directory
     owner: "{{ projects_user }}"
     mode: "0755"
 
-# Asked before touching anything: a repository with uncommitted changes is
-# skipped rather than updated, and silently skipping would be worse than not
-# trying at all.
+# Two questions are asked before anything is touched, because a machine with a
+# history answers them differently than a clean one:
+#
+#   - is this name already taken by something that is not a checkout? A stand
+#     is also a deployment target, and directories of unpacked artefacts live
+#     in the same place as repositories.
+#   - does the checkout have uncommitted work in it?
+#
+# Either way the project is named and skipped, and the rest of the list still
+# gets deployed. Failing on the first such directory would leave the run half
+# done and say nothing useful about why.
+- name: Look at the project directories
+  ansible.builtin.stat:
+    path: "{{ projects_dir }}/{{ item.name }}"
+  loop: "{{ projects_list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: projects_present
+
+- name: Look for a repository in each of them
+  ansible.builtin.stat:
+    path: "{{ projects_dir }}/{{ item.name }}/.git"
+  loop: "{{ projects_list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: projects_repo
+
+- name: Sort out which names are free and which are taken
+  ansible.builtin.set_fact:
+    # Present on disk but without a .git: not ours to write into.
+    projects_not_repo: >-
+      {{ projects_present.results | selectattr('stat.exists')
+         | map(attribute='item.name') | list
+         | difference(projects_repo.results | selectattr('stat.exists')
+                      | map(attribute='item.name') | list) }}
+    projects_checkouts: >-
+      {{ projects_repo.results | selectattr('stat.exists')
+         | map(attribute='item.name') | list }}
+
+- name: Name the directories that are not repositories
+  ansible.builtin.debug:
+    msg: >-
+      {{ item }}: {{ projects_dir }}/{{ item }} exists but is not a git
+      checkout — left alone. Move it aside, or give the project another name.
+  loop: "{{ projects_not_repo }}"
+
 # The git module can check out, pull and reset, but it cannot answer "is
 # there uncommitted work here" without touching the tree — which is the one
 # thing this task must not do.
@@ -26,38 +82,44 @@
   loop: "{{ projects_list }}"
   loop_control:
     label: "{{ item.name }}"
+  when: item.name in projects_checkouts
   register: projects_dirty
   changed_when: false
   failed_when: false
 
+- name: Note which checkouts have work in them
+  ansible.builtin.set_fact:
+    projects_dirty_names: >-
+      {{ projects_dirty.results | selectattr('stdout', 'defined')
+         | rejectattr('stdout', 'equalto', '')
+         | map(attribute='item.name') | list }}
+
 - name: Name the projects that will not be touched
   ansible.builtin.debug:
     msg: >-
-      {{ item.item.name }}: {{ item.stdout_lines | length }} uncommitted
-      change(s) — left alone. Commit or stash them, then run again.
-  loop: "{{ projects_dirty.results }}"
-  loop_control:
-    label: "{{ item.item.name }}"
-  when:
-    - item.rc | default(1) == 0
-    - item.stdout | default('') | length > 0
-    - not projects_force
+      {{ item }}: uncommitted changes — left alone. Commit or stash them,
+      then run again.
+  loop: "{{ projects_dirty_names }}"
+  when: not projects_force
 
 - name: Clone or update the projects
   become: true
   become_user: "{{ projects_user }}"
   ansible.builtin.git:
-    repo: "{{ item.item.repo }}"
-    dest: "{{ projects_dir }}/{{ item.item.name }}"
-    version: "{{ item.item.version if item.item.version != 'HEAD' else omit }}"
+    repo: "{{ item.repo }}"
+    dest: "{{ projects_dir }}/{{ item.name }}"
+    version: "{{ item.version if item.version != 'HEAD' else omit }}"
     # force: false makes git refuse rather than overwrite; combined with the
-    # skip below, a dirty checkout is never disturbed.
+    # skips below, neither a dirty checkout nor a stranger's directory is
+    # ever disturbed.
     force: "{{ projects_force }}"
     update: true
-  loop: "{{ projects_dirty.results }}"
+  loop: "{{ projects_list }}"
   loop_control:
-    label: "{{ item.item.name }}"
-  when: projects_force or item.stdout | default('') | length == 0
+    label: "{{ item.name }}"
+  when:
+    - item.name not in projects_not_repo
+    - projects_force or item.name not in projects_dirty_names
   register: projects_checkout
 
 # A project's Claude settings and CLAUDE.md live inside its repository, so
@@ -66,28 +128,38 @@
 # hour later, through the agent, is the worst way to learn it.
 - name: Look for a secrets file the project expects
   ansible.builtin.stat:
-    path: "{{ projects_dir }}/{{ item.name }}/{{ secrets_name }}"
-  vars:
-    secrets_name: .env
+    path: "{{ projects_dir }}/{{ item.name }}/.env"
   loop: "{{ projects_list }}"
   loop_control:
     label: "{{ item.name }}"
   register: projects_env
 
+# Checked on the target, not on the controller: `is exists` would answer for
+# the machine running ansible, which is the stand only when you install from
+# the stand itself.
+- name: Look for the example that says the project wants one
+  ansible.builtin.stat:
+    path: "{{ projects_dir }}/{{ item.name }}/.env.example"
+  loop: "{{ projects_list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: projects_env_example
+
 - name: Say which projects arrived without their secrets
   ansible.builtin.debug:
     msg: >-
-      {{ item.item.name }}: no .env here. If the project needs one, put it in
+      {{ item.0.item.name }}: no .env here. If the project needs one, put it in
       your secrets repository — it is not in git and did not come with the code.
-  loop: "{{ projects_env.results }}"
+  loop: "{{ projects_env.results | zip(projects_env_example.results) | list }}"
   loop_control:
-    label: "{{ item.item.name }}"
+    label: "{{ item.0.item.name }}"
   when:
-    - not item.stat.exists
-    - (projects_dir + '/' + item.item.name + '/.env.example') is exists
+    - not item.0.stat.exists
+    - item.1.stat.exists
 
-- name: Report what is on the stand now
+- name: Report what is in place now
   ansible.builtin.debug:
     msg: >-
-      {{ projects_list | length }} project(s) configured; start one with
-      `roost-session start <name>`
+      {{ projects_list | length }} project(s) configured,
+      {{ projects_not_repo | length }} name(s) taken by something else;
+      start one with `roost-session start <name>`
