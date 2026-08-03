@@ -1,14 +1,19 @@
 ---
-# Projects to put on the stand: a list of {name, repo, version}. The roost
-# wrapper builds it from projects.conf; version "HEAD" means the repository's
-# default branch.
+# The repositories that belong on this machine: a list of {name, repo,
+# version}. The roost wrapper builds it from projects.conf; version "HEAD"
+# means the repository's default branch.
+#
+# The same list is meant to be applied on every machine you work from, the
+# stand included — it says what should be checked out, not which machine is
+# the source. That is the repository's job.
 projects_list: []
 
 projects_user: "{{ ansible_user_id }}"
 projects_dir: "/home/{{ projects_user }}/work"
 
-# Never discard local work. A stand accumulates uncommitted changes — an
-# agent edits files there and does not always commit — and a checkout that
-# resets would destroy exactly the work you came for. Existing repositories
-# with modifications are reported and left alone.
+# Never discard local work. Any machine that gets worked on accumulates
+# uncommitted changes — an agent edits files and does not always commit — and
+# a checkout that resets would destroy exactly the work you came for. Existing
+# repositories with modifications are reported and left alone, and so are
+# directories that are not repositories at all.
 projects_force: false

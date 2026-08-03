@@ -1,11 +1,15 @@
 ---
-# Puts the projects listed in projects.conf on the stand.
+# Brings a machine up to the repository list in projects.conf.
 #
 #   ./roost projects
 #
-# Uncommitted work is never overwritten: a stand accumulates it, and losing
-# it is worse than an out-of-date checkout.
-- name: Deploy projects to the stand
+# The same list applies to the stand and to the workstation: this is "these
+# repositories should be checked out here", not "the workstation hands its
+# work to the stand". Whichever machine it runs on, nothing existing is
+# overwritten — a checkout with uncommitted work, or a name held by something
+# that is not a checkout, is named and left alone. Losing local work is worse
+# than an out-of-date checkout.
+- name: Check out the projects that belong on this machine
   hosts: stand
   become: true
   roles:

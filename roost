@@ -30,15 +30,28 @@ usage() {
 
 # --- configuration ------------------------------------------------------
 
+set_defaults() {
+	egress_profile=pinned agent_command=/usr/local/bin/claude
+	gate_host="" gate_domain="" auth=mtls project_dir="$HOME/work"
+}
+
 load_conf() {
 	[ -f "$CONF" ] || die "no $CONF yet — run 'roost setup' first"
 	# Simple key=value; no shell in the config file, on purpose.
-	egress_profile=pinned agent_command=/usr/local/bin/claude
-	gate_host="" gate_domain="" auth=mtls project_dir="$HOME/work"
+	set_defaults
 	while IFS='=' read -r key value; do
 		case "$key" in '' | \#*) continue ;; esac
 		printf -v "$key" '%s' "$value"
 	done < "$CONF"
+}
+
+# Reading the config where there may not be one. `projects` is the command
+# this exists for: a workstation brings its checkouts up to the same list and
+# has no stand to configure, so demanding `roost setup` there would be asking
+# about a gate and an egress profile that will never be used.
+load_conf_optional() {
+	set_defaults
+	[ ! -f "$CONF" ] || load_conf
 }
 
 check_conf() {
@@ -135,10 +148,16 @@ cmd_gate() {
 }
 
 # --- projects -----------------------------------------------------------
-# projects.conf lists what belongs on this stand, one per line:
+# projects.conf lists the repositories that belong on every machine you work
+# from, one per line:
 #
 #   isearch  https://git.example/isearch.git
 #   sorter   https://github.com/x/sorter.git  develop
+#
+# It is a list of what should be present, not a handover from one machine to
+# another: this command brings the machine it runs on up to the list, and the
+# stand and the workstation run it the same way. What they share is the
+# repository.
 #
 # A project's Claude settings and CLAUDE.md travel inside its own repository,
 # so putting the code here is all that is needed.
@@ -164,9 +183,9 @@ parse_projects() {
 }
 
 cmd_projects() {
-	load_conf
+	load_conf_optional
 	if [ ! -f "$PROJECTS_CONF" ]; then
-		log "no projects listed — create $PROJECTS_CONF to have them deployed here"
+		log "no projects listed — create $PROJECTS_CONF to have them checked out here"
 		return 0
 	fi
 	local list; list="$(parse_projects)"
@@ -181,7 +200,7 @@ cmd_projects() {
 	printf '[stand]\nlocalhost ansible_connection=local\n' > "$inv"
 	trap 'rm -f "$inv"' RETURN
 
-	log "deploying projects"
+	log "bringing this machine up to $PROJECTS_CONF"
 	ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/projects.yml" \
 		-e "projects_user=$(id -un)" \
 		-e "projects_dir=$project_dir" \

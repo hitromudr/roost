@@ -41,6 +41,32 @@ If the stand is behind NAT, you also need a machine with a routable address:
 | `agent_sessions` | stand | tmux sessions per project, mouse mode for phones |
 | `publish` | stand | the web terminal via its own installer, reverse tunnel |
 | `gate` | public entry | nginx with TLS, client CA, the tunnel account |
+| `projects` | any machine | checkouts of the repositories in `projects.conf` |
+| `env_sync` | any machine | the environment repository and its installer |
+
+### Projects: a list, not a handover
+
+`projects.conf` names the repositories that belong on **every** machine you
+work from. The stand is not a recipient here; it is one of those machines:
+
+```
+isearch  https://git.example/isearch.git
+sorter   https://github.com/x/sorter.git  develop
+```
+
+`./roost projects` brings the machine it runs on up to that list. What the
+machines share is the repository, not one of them, so the command belongs on
+the stand and on your laptop equally.
+
+Nothing already there is overwritten. A checkout with uncommitted work is
+named and skipped; so is a name held by a directory with no `.git` in it — an
+unpacked artefact, a deployment target — and the rest of the list is still
+checked out. Leave the branch out to follow the repository's default.
+
+The environment works the same way: `env_sync` puts your config repository in
+place and runs its own installer. If that repository carries encrypted files
+(`*.sops.*`), the role insists the age key is present — without it the secrets
+stay encrypted while the installer reports success.
 
 With `auth=mtls` and a gate, the web terminal is installed **without a token
 of its own**: the client certificate is the lock. A token the gate knows

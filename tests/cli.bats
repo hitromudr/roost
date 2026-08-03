@@ -206,6 +206,16 @@ write_projects() {
     ! grep -q "projects.yml" "$STUB_LOG"
 }
 
+@test "projects works on a machine that has no stand config" {
+    # The same list is applied on the workstation, which has no roost.conf and
+    # no reason to answer questions about a gate.
+    write_projects
+    run "$ROOST" projects
+    [ "$status" -eq 0 ]
+    grep -q "projects.yml" "$STUB_LOG"
+    grep -q "projects_dir=$HOME/work" "$STUB_LOG"
+}
+
 @test "projects runs the playbook with the parsed list" {
     write_conf "" "" mtls
     write_projects

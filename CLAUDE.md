@@ -40,8 +40,11 @@ Ansible roles:
 - `agent_sessions` (stand) — tmux sessions per project. **Done.**
 - `env_sync` — shell/editor config, secrets and agent context across
   machines. **Done.**
-- `projects` (stand) — clones the repositories listed in `projects.conf`,
-  skips the ones with uncommitted work. **Done.**
+- `projects` (any machine) — brings the machine it runs on up to the
+  repository list in `projects.conf`. The list says what should be checked
+  out, not which machine is the source: the stand and the workstation apply
+  the same one. Skips checkouts with uncommitted work and names taken by
+  something that is not a checkout. **Done.**
 
 Run playbooks from the repository root — `ansible.cfg` there points at
 `ansible/roles`. `make deps` first: the roles need `community.crypto` and

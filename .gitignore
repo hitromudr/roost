@@ -1,5 +1,12 @@
 bin/
 .env
+
+# Answers about one machine and one person: what the stand is called, which
+# repositories belong on it, which hosts ansible talks to. The examples next
+# to them are what travels.
+roost.conf
+projects.conf
+ansible/inventory
 *.log
 __pycache__/
 .venv/
