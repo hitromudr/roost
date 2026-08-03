@@ -4,12 +4,16 @@
 #   ansible-playbook -i ansible/inventory ansible/playbooks/teardown.yml --check
 #
 # What goes: the egress rules and their unit, the launcher and session helper,
-# the tunnel, the web terminal, and roost's own configuration directory.
+# and roost's own configuration directory.
 #
 # What stays, unless you pass -e roost_purge=true: your projects, your tmux
-# sessions, the sandbox group, and the terminal's token file. Those either
-# hold your work or are annoying to recreate; removing them by default would
-# make "let me try this" a decision with consequences.
+# sessions and the sandbox group. Those either hold your work or are annoying
+# to recreate; removing them by default would make "let me try this" a
+# decision with consequences.
+#
+# Also untouched, by design and not by omission: anything roost did not
+# install. A web terminal, a tunnel, a shell environment on this machine
+# belong to whoever put them there.
 - name: Remove roost from the stand
   hosts: stand
   become: true
@@ -17,7 +21,6 @@
     roost_purge: false
     egress_sandbox_group: agent-sandbox
     agent_sessions_prefix: roost-
-    publish_pockterm_dir: /opt/pockterm
   tasks:
     - name: Stop and disable the services
       ansible.builtin.systemd_service:
@@ -27,8 +30,6 @@
       failed_when: false
       loop:
         - egress-firewall
-        - roost-tunnel
-        - pockterm
       when: not ansible_check_mode
 
     # Rules live in the kernel: stopping the unit is not enough if it was
@@ -49,8 +50,6 @@
         state: absent
       loop:
         - egress-firewall.service
-        - roost-tunnel.service
-        - pockterm.service
 
     - name: Remove the commands
       ansible.builtin.file:
@@ -58,16 +57,9 @@
         state: absent
       loop:
         - /usr/local/sbin/egress-firewall
-        - /usr/local/sbin/tunnel-command
         - /usr/local/bin/agent-run
         - /usr/local/bin/roost-session
-        - /usr/local/bin/pockterm
         - /etc/profile.d/roost-session.sh
-
-    - name: Remove the checkout of the web terminal
-      ansible.builtin.file:
-        path: "{{ publish_pockterm_dir }}"
-        state: absent
 
     - name: Remove roost's configuration
       ansible.builtin.file:
@@ -80,12 +72,6 @@
       when: not ansible_check_mode
 
     # --- only with roost_purge ---------------------------------------
-
-    - name: Remove the terminal token and its directory
-      ansible.builtin.file:
-        path: /etc/pockterm
-        state: absent
-      when: roost_purge | bool
 
     - name: Remove the sandbox group
       ansible.builtin.group:
@@ -114,6 +100,6 @@
     - name: Mention what --purge would also remove
       ansible.builtin.debug:
         msg: >-
-          Kept: the {{ egress_sandbox_group }} group and /etc/pockterm.
-          Pass -e roost_purge=true to remove those too.
+          Kept: the {{ egress_sandbox_group }} group.
+          Pass -e roost_purge=true to remove it too.
       when: not (roost_purge | bool)

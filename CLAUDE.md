@@ -5,12 +5,15 @@ code in this repository.
 
 ## Overview
 
-roost turns a machine you own — a Raspberry Pi, a mini PC, an old laptop, a
-VPS — into a stand for CLI coding agents. Agents live in tmux sessions there,
-their outbound traffic is confined to a group with a fixed exit, and the whole
-thing is reachable from a phone through a web terminal.
+roost gives a machine you own — a Raspberry Pi, a mini PC, an old laptop, a
+VPS — a confined place to run CLI coding agents: a group whose outbound
+traffic has a fixed exit, a launcher that starts the agent inside it, tmux
+sessions per project, and the same checkouts and environment as your other
+machines.
 
-Design and rationale live in `docs/superpowers/specs/`.
+Design and rationale live in `docs/superpowers/specs/`. The 2026-08-02 spec
+describes a wider project — a stand including its own web terminal, tunnel and
+public entry point; that scope was withdrawn on 2026-08-03, see "Scope" below.
 
 ## Commands
 
@@ -19,36 +22,52 @@ make help     # list targets
 make check    # lint and tests
 ```
 
+## Scope
+
+**roost owns only what roost installed.** Serving sessions to the outside —
+web terminal, tunnel, public entry point — is not part of it. Sessions are
+plain tmux, so anything that speaks tmux can front them.
+
+This is the project's main constraint and it was learned the expensive way:
+the `publish` role installed pockterm on a machine that already ran one and
+gave it a second token, unknown to the reverse proxy in front. Every request
+answered 401, which a browser shows as a machine with no sessions. Two owners
+of one unit break it the first time they disagree. The roles `publish` and
+`gate` were removed on 2026-08-03 for that reason — do not reintroduce them,
+and do not add tasks that touch units, files or services roost did not create.
+
 ## Architecture
 
-Three nodes:
+Two kinds of machine, and the difference is smaller than it looks:
 
-| Node | What it is | Required |
-|---|---|---|
-| stand | the machine agents run on, usually behind NAT | yes |
-| gate | public entry point with a routable address | no, if the stand is public |
-| workstation | the machine you work from | yes |
+| Node | What it is |
+|---|---|
+| stand | a machine that runs agents: sandbox, sessions, projects, environment |
+| workstation | a machine you work from: projects and environment, no sandbox |
 
 Ansible roles:
 
 - `egress_sandbox` (stand) — group-based egress policy (`gid-owner` rules) and
-  the `agent-run` launcher. The core of the project. **Done.**
-- `publish` (stand) — installs pockterm through its own installer, opens the
-  reverse tunnel to the gate. **Done.**
-- `gate` (gate) — nginx with TLS, client CA and certificates for mutual TLS,
-  the unprivileged account the tunnel logs in as. **Done.**
-- `agent_sessions` (stand) — tmux sessions per project. **Done.**
-- `env_sync` — shell/editor config, secrets and agent context across
-  machines. **Done.**
+  the `agent-run` launcher. The core of the project.
+- `agent_sessions` (stand) — tmux sessions per project, named `roost-<project>`.
 - `projects` (any machine) — brings the machine it runs on up to the
   repository list in `projects.conf`. The list says what should be checked
-  out, not which machine is the source: the stand and the workstation apply
-  the same one. Skips checkouts with uncommitted work and names taken by
-  something that is not a checkout. **Done.**
+  out, not which machine is the source. Skips checkouts with uncommitted work
+  and names taken by something that is not a checkout.
+- `env_sync` (any machine) — the environment repository and its installer,
+  with an age-key check for repositories carrying encrypted files.
 
 Run playbooks from the repository root — `ansible.cfg` there points at
-`ansible/roles`. `make deps` first: the roles need `community.crypto` and
-`ansible.posix`.
+`ansible/roles`. The roles use `ansible.builtin` only: no collections to
+install, which matters on a machine running whatever ansible its distribution
+ships.
+
+## Tests
+
+`tests/*.bats`. The wrapper and the shell scripts are tested with stubs; the
+`projects` and `env_sync` roles are run for real by `ansible-playbook` against
+throwaway directories — no docker, no root, skipped where ansible is absent
+(CI installs ansible-lint, not ansible). `tests/integration/` needs docker.
 
 ## Conventions
 
@@ -57,5 +76,6 @@ User-facing documentation is bilingual: `README.md` (Russian) and
 `README.en.md` (English), linked from each other.
 
 No secrets in the repository. Anything host-specific — proxy credentials,
-tokens, addresses — is configuration: documented in the README, stored in
-files with 600 permissions on the target machine, never committed.
+addresses, the repository list — is configuration: `roost.conf`,
+`projects.conf` and `ansible/inventory` are gitignored, their `.example`
+counterparts are what travels.

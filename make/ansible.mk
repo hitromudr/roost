@@ -1,16 +1,11 @@
-.PHONY: deps stand gate stand-check gate-check
+.PHONY: stand stand-check projects projects-check
 
 INVENTORY ?= ansible/inventory
 
-# Installed into the user path explicitly: distributions ship collections in
-# a system directory that tools installed separately (ansible-lint from pipx,
-# for one) do not read, and then the modules "do not exist" during linting.
-# --force is needed, not paranoia: when a distribution ships these collections
-# inside the ansible package, galaxy sees them, reports "nothing to do", and
-# leaves the user path empty — where separately installed tools look.
-deps: ## Install the ansible collections the roles need
-	ansible-galaxy collection install -r ansible/requirements.yml --force \
-		-p "$${ANSIBLE_COLLECTIONS_PATH:-$$HOME/.ansible/collections}"
+# No `deps` target: the roles use ansible-builtin modules only. That is a
+# constraint worth keeping — a stand is often a machine running whatever
+# ansible its distribution ships, and every collection is one more thing to
+# install before anything works.
 
 stand-check: ## Dry-run the stand playbook
 	ansible-playbook -i $(INVENTORY) ansible/playbooks/stand.yml --check --diff
@@ -18,8 +13,8 @@ stand-check: ## Dry-run the stand playbook
 stand: ## Configure the stand
 	ansible-playbook -i $(INVENTORY) ansible/playbooks/stand.yml
 
-gate-check: ## Dry-run the gate playbook
-	ansible-playbook -i $(INVENTORY) ansible/playbooks/gate.yml --check --diff
+projects-check: ## Dry-run the projects playbook
+	ansible-playbook -i $(INVENTORY) ansible/playbooks/projects.yml --check --diff
 
-gate: ## Configure the gate
-	ansible-playbook -i $(INVENTORY) ansible/playbooks/gate.yml
+projects: ## Check out the projects listed in projects.conf
+	ansible-playbook -i $(INVENTORY) ansible/playbooks/projects.yml

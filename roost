@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# roost — set up and check a personal stand for CLI coding agents.
+# roost — a confined place for CLI coding agents to run.
 #
 #   roost setup     answer a few questions, write roost.conf
 #   roost install   apply the configuration to this machine
-#   roost doctor    check that the stand is what it claims to be
-#   roost qr        show the link for your phone as a QR code
-#   roost gate add <user@host>      prepare a public entry point
-#   roost gate remove <user@host>   undo that
-#   roost projects [--list]         put the projects from projects.conf on this machine
+#   roost doctor    check that the sandbox is what it claims to be
+#   roost projects [--list]         check out the repositories in projects.conf
 #   roost uninstall [--purge]       remove roost from this machine
 #
 # Everything it does is an ansible role underneath; this wrapper exists so
 # that the common path is one command and the questions are asked once.
+#
+# Reaching the machine from outside is deliberately not here — see README.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,14 +24,14 @@ bad()  { printf '\033[1;31m  ✗\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[roost]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
-	sed -n '2,13p' "$ROOT/roost" | sed 's/^# \{0,1\}//'
+	sed -n '2,10p' "$ROOT/roost" | sed 's/^# \{0,1\}//'
 }
 
 # --- configuration ------------------------------------------------------
 
 set_defaults() {
 	egress_profile=pinned agent_command=/usr/local/bin/claude
-	gate_host="" gate_domain="" auth=mtls project_dir="$HOME/work"
+	project_dir="$HOME/work"
 }
 
 load_conf() {
@@ -46,45 +45,38 @@ load_conf() {
 }
 
 # Reading the config where there may not be one. `projects` is the command
-# this exists for: a workstation brings its checkouts up to the same list and
-# has no stand to configure, so demanding `roost setup` there would be asking
-# about a gate and an egress profile that will never be used.
+# this exists for: a machine that runs no agents still wants the same
+# checkouts, so demanding `roost setup` there would be asking about an egress
+# profile that will never be used.
 load_conf_optional() {
 	set_defaults
 	[ ! -f "$CONF" ] || load_conf
 }
 
 check_conf() {
-	case "$auth" in
-		token | mtls) ;;
-		*) die "auth is '$auth': publishing a terminal without authentication is not supported — set auth=token or auth=mtls" ;;
+	case "$egress_profile" in
+		pinned | proxied | direct) ;;
+		*) die "egress_profile is '$egress_profile' — expected pinned, proxied or direct" ;;
 	esac
-	if [ -n "$gate_host" ] && [ -z "$gate_domain" ]; then
-		die "gate_host is set but gate_domain is empty — the gate terminates TLS for a name"
-	fi
 }
 
 cmd_setup() {
-	local profile agent gate domain authmode
+	local profile agent
 	log "a few questions; answers go to $CONF and are not asked again"
 	read -rp "  egress profile [pinned/proxied/direct] (pinned): " profile
 	read -rp "  agent command (/usr/local/bin/claude): " agent
-	read -rp "  gate host, empty if this machine is public (): " gate
-	if [ -n "$gate" ]; then
-		read -rp "  domain the phone opens: " domain
-		read -rp "  authentication [mtls/token] (mtls): " authmode
-	fi
 	cat > "$CONF" <<EOF
 # Written by 'roost setup'. Edit freely; 'roost install' reads it.
 egress_profile=${profile:-pinned}
 agent_command=${agent:-/usr/local/bin/claude}
-gate_host=${gate}
-gate_domain=${domain:-}
-auth=${authmode:-mtls}
 project_dir=$HOME/work
 EOF
 	ok "wrote $CONF"
 	log "next: roost install"
+	if [ "${profile:-pinned}" != direct ]; then
+		log "the pinned and proxied profiles need PROXY_URL in $PROXY_ENV —"
+		log "without it the agent has no network at all"
+	fi
 }
 
 # --- install ------------------------------------------------------------
@@ -94,57 +86,20 @@ cmd_install() {
 	check_conf
 	command -v ansible-playbook >/dev/null || die "ansible is not installed"
 
-	log "installing collections"
-	ansible-galaxy collection install -r "$ROOT/ansible/requirements.yml" --force \
-		-p "${ANSIBLE_COLLECTIONS_PATH:-$HOME/.ansible/collections}" >/dev/null
-
 	local inv="${TMPDIR:-/tmp}/roost-inventory.$$"
 	printf '[stand]\nlocalhost ansible_connection=local\n' > "$inv"
 	trap 'rm -f "$inv"' RETURN
 
-	log "applying the stand configuration"
+	log "applying the configuration"
 	ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/stand.yml" \
 		-e "egress_sandbox_profile=$egress_profile" \
 		-e "egress_sandbox_agent_command=$agent_command" \
 		-e "agent_sessions_user=$(id -un)" \
 		-e "agent_sessions_project_dir=$project_dir" \
-		-e "publish_gate_host=$gate_host" \
-		-e "{\"egress_sandbox_users\": [\"$(id -un)\"]}" \
-		-e "publish_token=$([ "$auth" = mtls ] && [ -n "$gate_host" ] && echo false || echo true)"
+		-e "{\"egress_sandbox_users\": [\"$(id -un)\"]}"
 
-	ok "the stand is configured"
-	if [ -n "$gate_host" ]; then
-		log "next: roost gate add <user@$gate_host>, then roost doctor"
-	else
-		log "next: roost doctor"
-	fi
-}
-
-cmd_gate() {
-	local action="${1:-}" target="${2:-}"
-	case "$action" in add | remove) ;; *) die "usage: roost gate {add|remove} <user@host>" ;; esac
-	[ -n "$target" ] || die "usage: roost gate $action <user@host>"
-	load_conf
-	[ -n "$gate_domain" ] || die "gate_domain is empty — set it in $CONF"
-
-	local inv="${TMPDIR:-/tmp}/roost-gate-inventory.$$"
-	printf '[gate]\n%s ansible_host=%s ansible_user=%s\n' \
-		"${target#*@}" "${target#*@}" "${target%@*}" > "$inv"
-	trap 'rm -f "$inv"' RETURN
-
-	if [ "$action" = remove ]; then
-		log "removing roost from the gate at ${target#*@}"
-		ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/gate-teardown.yml" \
-			-e "gate_domain=$gate_domain" ${purge:+-e roost_purge=true}
-		return
-	fi
-
-	check_conf
-	log "configuring the gate at ${target#*@}"
-	ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/gate.yml" \
-		-e "gate_domain=$gate_domain" \
-		-e "gate_auth=$auth" \
-		-e "gate_tunnel_keys=[\"$(cat /etc/roost/tunnel_key.pub 2>/dev/null || echo '')\"]"
+	ok "the sandbox is configured"
+	log "next: roost doctor"
 }
 
 # --- projects -----------------------------------------------------------
@@ -227,14 +182,13 @@ cmd_uninstall() {
 This removes from $(hostname):
   · the egress rules and their unit
   · the agent launcher and the session helper
-  · the tunnel to the gate, if any
-  · the web terminal, its unit and its checkout
   · /etc/roost
 
 It keeps:
   · your projects and any running tmux sessions
+  · anything else on this machine — a web terminal, a tunnel, your shell
   · $( [ -n "$purge" ] && echo "nothing else — --purge was given" \
-        || echo "the sandbox group and /etc/pockterm (use --purge to remove them)" )
+        || echo "the sandbox group (use --purge to remove it)" )
 EOF
 
 	if [ -n "$dry" ]; then
@@ -293,34 +247,26 @@ cmd_doctor() {
 		fi
 	fi
 
-	if systemctl is-active --quiet pockterm 2>/dev/null; then
-		ok "web terminal is running"
-	else
-		bad "web terminal is not running"
-		echo "      fix: roost install, then journalctl -u pockterm"
-		failed=1
-	fi
-
-	if [ -n "$gate_host" ]; then
-		if systemctl is-active --quiet roost-tunnel 2>/dev/null; then
-			ok "tunnel to $gate_host is up"
-		else
-			bad "tunnel to $gate_host is down — nothing outside can reach this stand"
-			echo "      fix: journalctl -u roost-tunnel; check the key is authorised on the gate"
+	# The launcher reads this file as the agent's own account. Owned by the
+	# group alone it is unreadable to a tmux server that started before the
+	# group existed — and the session then dies the instant it is created.
+	if [ -f "$PROXY_ENV" ]; then
+		local owner perms
+		owner="$(stat -c '%U' "$PROXY_ENV")"
+		perms="$(stat -c '%a' "$PROXY_ENV")"
+		if [ "$owner" = root ]; then
+			bad "$PROXY_ENV is owned by root — agent-run cannot read it"
+			echo "      fix: chown $(id -un) $PROXY_ENV"
 			failed=1
-		fi
-	fi
-
-	if [ -f /etc/pockterm/pockterm.env ]; then
-		local perms
-		perms="$(stat -c '%a' /etc/pockterm/pockterm.env)"
-		if [ "$perms" = 600 ]; then
-			ok "terminal token is not world-readable"
 		else
-			bad "/etc/pockterm/pockterm.env has permissions $perms"
-			echo "      fix: chmod 600 /etc/pockterm/pockterm.env"
-			failed=1
+			ok "the launcher can read its credentials file"
 		fi
+		case "$perms" in
+			600 | 640) ;;
+			*) bad "$PROXY_ENV has permissions $perms — the proxy password is readable"
+			   echo "      fix: chmod 640 $PROXY_ENV"
+			   failed=1 ;;
+		esac
 	fi
 
 	if tmux list-sessions >/dev/null 2>&1; then
@@ -332,24 +278,12 @@ cmd_doctor() {
 	return "$failed"
 }
 
-cmd_qr() {
-	load_conf
-	local url="${1:-}"
-	if [ -z "$url" ] && [ -n "$gate_domain" ]; then
-		url="https://$gate_domain/"
-	fi
-	command -v pockterm >/dev/null || die "pockterm is not installed — run 'roost install'"
-	pockterm qr ${url:+"$url"}
-}
-
 case "${1:-help}" in
 	setup)     shift; cmd_setup "$@" ;;
 	install)   shift; cmd_install "$@" ;;
-	gate)      shift; cmd_gate "$@" ;;
 	projects)  shift; cmd_projects "$@" ;;
 	uninstall) shift; cmd_uninstall "$@" ;;
-	doctor)  shift; cmd_doctor "$@" ;;
-	qr)      shift; cmd_qr "$@" ;;
+	doctor)    shift; cmd_doctor "$@" ;;
 	help | -h | --help) usage ;;
 	*)       printf 'roost: unknown command %s\n\n' "${1:-}" >&2; usage >&2; exit 1 ;;
 esac

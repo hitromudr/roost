@@ -2,6 +2,16 @@
 
 Date: 2026-08-02.
 
+> **Partly superseded on 2026-08-03.** Problem 2 below — reaching the machine
+> from outside — was dropped from the project, and with it the `publish` and
+> `gate` roles. A stand is rarely an empty machine: on the first real one it
+> already ran a web terminal, and roost installing a second owner for that
+> unit cost an evening of 401s that looked like an empty session list. What
+> remains is the sandbox, the sessions, the projects and the environment;
+> sessions are plain tmux, so any terminal that speaks tmux can front them.
+> The rest of this document is kept as written — it records why the wider
+> shape looked right at the time.
+
 ## The problem
 
 Working with a CLI agent ties you to the machine it runs on. Moving it to a
