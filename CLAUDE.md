@@ -72,6 +72,15 @@ ships.
 throwaway directories — no docker, no root, skipped where ansible is absent
 (CI installs ansible-lint, not ansible). `tests/integration/` needs docker.
 
+One `--check` result to read past: `Enable tmux mouse mode for the user` is
+reported as changing `~/.tmux.conf` from mode 0777 to 0644 on a machine where
+that path is a **symlink** into a dotfiles repository. 0777 is the link's own
+mode, which is what `lineinfile` sees in check mode; a real run follows the link
+to the 0644 file behind it, finds the line already there, and reports
+`changed: false` without touching either. Measured on 2026-08-05, both ways,
+against a throwaway fixture — the alarming diff is a check-mode artefact, not a
+world-writable config and not a second owner for a file dotfiles keeps.
+
 ## Conventions
 
 Code comments, technical documentation and commit messages are in English.
