@@ -20,7 +20,8 @@ started it, so `codex-safe` run inside a Claude session started Claude and
 reported its version. The name outranks the environment — the only place where
 it does.
 
-Three decisions are still the operator's and are listed at the end.
+Two of the three decisions at the end are settled (2026-08-05); the sticky exit
+is the one still open.
 
 ## Why now
 
@@ -163,19 +164,23 @@ the list is not rebuilt later; each belongs in its own repository's history.
 | `RPi5` | landlock in `cmdline.txt`, with the reboot that implies |
 | `~/work/CLAUDE.md` (stand) | the "who owns what" section gains a second agent |
 
-## Operator decisions still open
+## Operator decisions
 
-1. **Authentication.** `codex login` serves a callback on `localhost:1455` and
-   needs a browser; the stand has none, and `chatgpt.com` HTML answers 403
-   from the sanctioned exits. The paths are: log in on the laptop and copy
-   `~/.codex/auth.json` to the stand — a corporate token on a machine exposed
-   on the Wi-Fi, against the boundary `exante/CLAUDE.md` states outright; an
-   API key or service account, if the corporate plan issues one; or Codex on
-   the laptop only, with the stand not using it.
-2. **Where the corporate subscription applies.** Codex on `natal` or
-   `politicum` spends a corporate resource on personal work. The mirror case
-   is already forbidden explicitly. Decide once, in writing, rather than per
-   session.
+1. **Authentication — settled 2026-08-05.** Not by copying `auth.json`: the
+   refresh token is single-use, so a copy on two machines puts itself out at the
+   first rotation. Each machine logs in for itself with `--device-auth`, no
+   browser and no callback port; the device-code page is opened by the person's
+   own browser, so its geography is theirs. What remains on the stand is a
+   per-device corporate credential that can be revoked on its own — narrower
+   than the laptop's token, but still a corporate credential on a machine
+   `exante/CLAUDE.md` says corporate keys do not belong on. A deliberate
+   exception, not an oversight.
+2. **Where the corporate subscription applies — settled 2026-08-05: everywhere,
+   including personal projects.** Codex on `natal`, `politicum` or `self` is the
+   owner's call and is normal; no per-session weighing. What this does *not*
+   loosen is the traffic in the other direction, which is what
+   `exante/CLAUDE.md` is about: no corporate secrets, no corporate checkouts and
+   no run artefacts on this machine.
 3. **Sticky exit.** EMMET is the sticky-IP exit chosen for Anthropic. OpenAI
    is no more relaxed about a moving address, and a corporate account may read
    a Swiss exit as an anomaly. Either the same exit with the risk accepted, or
