@@ -7,33 +7,87 @@
 # machine can read.
 #
 #   agent-run [args...]     start the configured agent, passing args through
+#   codex-safe [args...]    the same, for the agent named by the link's name
 #
 # Configuration comes from /etc/roost/agent-run.env (written by the ansible
 # role), and any variable already set in the environment wins over it:
 #   AGENT_GROUP     group to run under
 #   AGENT_COMMAND   the agent binary
 #   AGENT_ENV_FILE  optional file with PROXY_URL and anything else it needs
+#
+# A second agent is a second name for this script, not a second script: a
+# symlink called `codex-safe` (or `codex-run`) reads
+# /etc/roost/agents/codex.env, which names that agent's binary, and everything
+# else — group, proxy, profile — stays the one policy both agents share. A
+# wrapper per agent would mean a copy of that policy per agent, and copies
+# disagree.
 set -euo pipefail
 
-CONFIG="${AGENT_CONFIG:-/etc/roost/agent-run.env}"
-if [ -f "$CONFIG" ]; then
+die() { printf '%s: %s\n' "$SELF" "$*" >&2; exit 1; }
+
+SELF="$(basename -- "$0")"
+
+# Read key=value into the environment without overriding what is already
+# there. Callers load the most specific file first for that reason.
+load_env() {
+	[ -f "$1" ] || return 0
 	while IFS='=' read -r key value; do
 		case "$key" in '' | \#*) continue ;; esac
 		# Environment wins: a one-off override should not need the file
 		# edited, and the tests rely on this too.
 		[ -n "${!key:-}" ] || export "$key=$value"
-	done < "$CONFIG"
-fi
+	done < "$1"
+}
+
+CONFIG="${AGENT_CONFIG:-/etc/roost/agent-run.env}"
+AGENT_DIR="${AGENT_DIR:-/etc/roost/agents}"
+
+# The name the launcher was invoked as selects the agent. `-safe` matches the
+# wrapper names these machines already use for Claude; `-run` matches this
+# script's own. A link whose agent has no file is a typo or a half-finished
+# install, and saying so here is the difference between a message and a
+# session that dies the moment tmux opens it.
+case "$SELF" in
+	agent-run) ;;
+	*)
+		agent="${SELF%-safe}"
+		agent="${agent%-run}"
+		[ -f "$AGENT_DIR/$agent.env" ] ||
+			die "no agent named '$agent': $AGENT_DIR/$agent.env is missing"
+		# The name is the request, so here it outranks the environment — the
+		# one place where it does. An agent's session carries the
+		# AGENT_COMMAND that opened it, so a launcher started from inside a
+		# session (a helper, a second window, a button that runs a command in
+		# the current one) would otherwise start that agent again under this
+		# one's name, and report the wrong version when asked.
+		unset AGENT_COMMAND
+		load_env "$AGENT_DIR/$agent.env"
+		# An agent file naming a launcher would loop: the launcher resolves the
+		# name, finds the launcher, runs it. Cheap to say once.
+		if [ "$(readlink -f -- "${AGENT_COMMAND:-/nonexistent}" 2>/dev/null)" = "$(readlink -f -- "$0")" ]; then
+			die "$AGENT_DIR/$agent.env names this launcher instead of an agent"
+		fi
+		;;
+esac
+
+load_env "$CONFIG"
 
 GROUP="${AGENT_GROUP:-}"
 COMMAND="${AGENT_COMMAND:-}"
 ENV_FILE="${AGENT_ENV_FILE:-}"
 PROFILE="${AGENT_PROFILE:-pinned}"
 
-die() { printf 'agent-run: %s\n' "$*" >&2; exit 1; }
-
 [ -n "$GROUP" ]   || die "AGENT_GROUP is not set"
 [ -n "$COMMAND" ] || die "AGENT_COMMAND is not set"
+
+# An agent that is not there is the failure that hides: `sg` reports "command
+# not found" and exits 127, and a session started for it closes in the same
+# instant — on a phone that reads as a button that does nothing. Checked here,
+# where the name is still known.
+case "$COMMAND" in
+	*/*) [ -x "$COMMAND" ] || die "AGENT_COMMAND=$COMMAND is not an executable file" ;;
+	*)   command -v "$COMMAND" >/dev/null 2>&1 || die "AGENT_COMMAND=$COMMAND is not in PATH" ;;
+esac
 
 if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
 	# Credentials in a world-readable file are a misconfiguration worth
@@ -81,7 +135,12 @@ printf -v args '%q ' "$COMMAND" "$@"
 
 restore_terminal() {
 	# A TUI agent that exits badly leaves the terminal in alternate-screen
-	# mode with the cursor hidden. Put it back.
+	# mode with the cursor hidden. Put it back — but only when there is a
+	# terminal to put back: written to a pipe these escapes become part of the
+	# output, and a caller parsing it (a test, a script, a session helper)
+	# reads them as data. The exit status survives either way, the reset runs
+	# from a trap rather than as the last command.
+	[ -t 1 ] && [ -n "${TERM:-}" ] || return 0
 	printf '\e[?1049l\e[?25h\e[0m'
 	stty sane 2>/dev/null || true
 }

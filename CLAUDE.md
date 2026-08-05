@@ -48,7 +48,10 @@ Two kinds of machine, and the difference is smaller than it looks:
 Ansible roles:
 
 - `egress_sandbox` (stand) — group-based egress policy (`gid-owner` rules) and
-  the `agent-run` launcher. The core of the project.
+  the `agent-run` launcher. The core of the project. A second agent is a second
+  name for that launcher (`codex-safe` → `/etc/roost/agents/codex.env`), not a
+  second wrapper: one group and one policy for every agent on the machine,
+  declared in `egress_sandbox_agents` (`agents=` in `roost.conf`).
 - `agent_sessions` (stand) — tmux sessions per project, named `roost-<project>`.
 - `projects` (any machine) — brings the machine it runs on up to the
   repository list in `projects.conf`. The list says what should be checked

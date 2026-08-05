@@ -147,3 +147,112 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"permissions"* || "$output" == *"0600"* ]]
 }
+
+# --- a second agent -----------------------------------------------------
+# The launcher's own name selects the agent, so a second agent costs a symlink
+# and a one-line file instead of a second wrapper with its own copy of the
+# group, the proxy and the profile.
+
+@test "a launcher named after an agent takes its binary from that agent's file" {
+    mkdir -p "$BATS_TEST_TMPDIR/agents"
+    printf 'AGENT_COMMAND=/usr/bin/env\n' > "$BATS_TEST_TMPDIR/agents/codex.env"
+    ln -s "$SCRIPT" "$BATS_TEST_TMPDIR/codex-safe"
+    run env -u AGENT_COMMAND AGENT_DIR="$BATS_TEST_TMPDIR/agents" \
+        "$BATS_TEST_TMPDIR/codex-safe"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"sg-called group=agent-sandbox"* ]]
+    [[ "$output" == *"arg=[/usr/bin/env]"* ]]
+}
+
+@test "a named launcher still takes the group and the proxy from the machine" {
+    mkdir -p "$BATS_TEST_TMPDIR/agents"
+    printf 'AGENT_COMMAND=/usr/bin/true\n' > "$BATS_TEST_TMPDIR/agents/codex.env"
+    cat > "$BATS_TEST_TMPDIR/agent-run.env" <<EOF
+AGENT_GROUP=from-file
+AGENT_ENV_FILE=$ENV_FILE
+EOF
+    # The -run suffix names an agent the same way -safe does.
+    ln -s "$SCRIPT" "$BATS_TEST_TMPDIR/codex-run"
+    run env -u AGENT_GROUP -u AGENT_COMMAND -u AGENT_ENV_FILE \
+        AGENT_CONFIG="$BATS_TEST_TMPDIR/agent-run.env" \
+        AGENT_DIR="$BATS_TEST_TMPDIR/agents" \
+        AGENT_DEBUG_ENV=1 "$BATS_TEST_TMPDIR/codex-run"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"sg-called group=from-file"* ]]
+    [[ "$output" == *"HTTPS_PROXY=http://user:secret@127.0.0.1:8129"* ]]
+}
+
+@test "the agent's own file wins over the shared one" {
+    mkdir -p "$BATS_TEST_TMPDIR/agents"
+    printf 'AGENT_COMMAND=/usr/bin/env\n' > "$BATS_TEST_TMPDIR/agents/codex.env"
+    cat > "$BATS_TEST_TMPDIR/agent-run.env" <<EOF
+AGENT_GROUP=agent-sandbox
+AGENT_COMMAND=/usr/bin/true
+AGENT_ENV_FILE=$ENV_FILE
+EOF
+    ln -s "$SCRIPT" "$BATS_TEST_TMPDIR/codex-safe"
+    run env -u AGENT_GROUP -u AGENT_COMMAND -u AGENT_ENV_FILE \
+        AGENT_CONFIG="$BATS_TEST_TMPDIR/agent-run.env" \
+        AGENT_DIR="$BATS_TEST_TMPDIR/agents" "$BATS_TEST_TMPDIR/codex-safe"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"arg=[/usr/bin/env]"* ]]
+    [[ "$output" != *"arg=[/usr/bin/true]"* ]]
+}
+
+@test "a launcher whose agent has no file says which name is missing" {
+    ln -s "$SCRIPT" "$BATS_TEST_TMPDIR/qwen-safe"
+    run env AGENT_DIR="$BATS_TEST_TMPDIR/agents" "$BATS_TEST_TMPDIR/qwen-safe"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"qwen-safe:"* ]]
+    [[ "$output" == *"no agent named 'qwen'"* ]]
+    [[ "$output" != *"sg-called"* ]]
+}
+
+@test "an agent binary that is absent stops the launcher, with the reason" {
+    # Otherwise sg reports "command not found", exits 127, and the tmux session
+    # started for it closes in the same instant — a button that does nothing.
+    run env AGENT_COMMAND="$BATS_TEST_TMPDIR/no-such-agent" "$SCRIPT"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not an executable file"* ]]
+    [[ "$output" != *"sg-called"* ]]
+}
+
+@test "an agent named without a path must be in PATH" {
+    run env AGENT_COMMAND=no-such-agent-in-path "$SCRIPT"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not in PATH"* ]]
+}
+
+@test "nothing but the agent's output reaches a pipe" {
+    # The terminal reset belongs to a terminal: written to a pipe its escapes
+    # become part of the output, and whatever parses that reads them as data.
+    run "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *$'\e'* ]]
+}
+
+@test "a named launcher ignores the AGENT_COMMAND it inherited" {
+    # Every session an agent opens carries the AGENT_COMMAND that started it.
+    # A launcher called by name inside such a session must start the agent its
+    # name asks for, not the one that opened the session.
+    mkdir -p "$BATS_TEST_TMPDIR/agents"
+    printf 'AGENT_COMMAND=/usr/bin/env\n' > "$BATS_TEST_TMPDIR/agents/codex.env"
+    ln -s "$SCRIPT" "$BATS_TEST_TMPDIR/codex-safe"
+    run env AGENT_COMMAND=/usr/bin/true AGENT_DIR="$BATS_TEST_TMPDIR/agents" \
+        "$BATS_TEST_TMPDIR/codex-safe"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"arg=[/usr/bin/env]"* ]]
+    [[ "$output" != *"arg=[/usr/bin/true]"* ]]
+}
+
+@test "an agent file that names the launcher itself is refused" {
+    mkdir -p "$BATS_TEST_TMPDIR/agents"
+    ln -s "$SCRIPT" "$BATS_TEST_TMPDIR/codex-safe"
+    printf 'AGENT_COMMAND=%s\n' "$BATS_TEST_TMPDIR/codex-safe" \
+        > "$BATS_TEST_TMPDIR/agents/codex.env"
+    run env -u AGENT_COMMAND AGENT_DIR="$BATS_TEST_TMPDIR/agents" \
+        "$BATS_TEST_TMPDIR/codex-safe"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"names this launcher"* ]]
+    [[ "$output" != *"sg-called"* ]]
+}

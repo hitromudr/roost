@@ -28,7 +28,31 @@ not what happens when configuration is skipped.
   terminal afterwards;
 - `/etc/roost/agent-run.env` — which group and which agent (no secrets);
 - `/etc/roost/agent-proxy.env` — the credentials, 0600, seeded as a template
-  you fill in unless you pass `egress_sandbox_proxy_url`.
+  you fill in unless you pass `egress_sandbox_proxy_url`;
+- one launcher per extra agent you declare — see below.
+
+## A second agent
+
+The launcher decides which agent to start from the name it was called by, so a
+second agent is a link and a one-line file rather than a second wrapper:
+
+```yaml
+egress_sandbox_agents:
+  codex: /home/dms/.local/bin/codex
+```
+
+installs `/usr/local/bin/codex-safe` (a link to `agent-run`) and
+`/etc/roost/agents/codex.env`, which names that binary and nothing else. The
+group, the proxy and the profile come from the machine's own configuration —
+one policy for every agent on it, not a copy per agent. `codex-run` works as
+another name for the same thing; `egress_sandbox_agent_suffix` decides which
+one is installed.
+
+An agent whose file is missing makes the launcher refuse with the name it was
+looking for, and so does an `AGENT_COMMAND` that is not there: without that
+check `sg` reports `command not found`, exits 127, and a tmux session opened
+for the agent closes in the same instant — which reads as a launcher that does
+nothing rather than one that has something to say.
 
 ## Variables
 
@@ -40,6 +64,7 @@ egress_sandbox_profile: pinned          # pinned | proxied | direct
 egress_sandbox_allow: []                # for proxied: addresses or CIDRs
 egress_sandbox_users: [you]
 egress_sandbox_agent_command: /usr/local/bin/claude
+egress_sandbox_agents: {}               # name: binary, one launcher each
 egress_sandbox_proxy_url: ""            # better supplied from a vault
 ```
 

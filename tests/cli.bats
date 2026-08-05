@@ -252,3 +252,49 @@ write_projects() {
     # Unrestricted egress was the choice; there is nothing to proxy through.
     [[ "$output" != *"no network at all"* ]]
 }
+
+# --- extra agents -------------------------------------------------------
+
+@test "install passes the extra agents to ansible" {
+    write_conf
+    printf 'agents=codex:/home/you/.local/bin/codex\n' >> "$ROOST_CONF"
+    run "$ROOST" install
+    [ "$status" -eq 0 ]
+    grep -q '"egress_sandbox_agents": {"codex":"/home/you/.local/bin/codex"}' "$STUB_LOG"
+}
+
+@test "two extra agents are both passed" {
+    write_conf
+    printf 'agents=codex:/opt/codex,qwen:/opt/qwen\n' >> "$ROOST_CONF"
+    run "$ROOST" install
+    [ "$status" -eq 0 ]
+    grep -q '"codex":"/opt/codex","qwen":"/opt/qwen"' "$STUB_LOG"
+}
+
+@test "an agent without a command is refused before anything is applied" {
+    write_conf
+    printf 'agents=codex\n' >> "$ROOST_CONF"
+    run "$ROOST" install
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no command"* ]]
+    # A name that would become a file name and a launcher name must not reach
+    # ansible half-formed.
+    ! grep -q "ansible-playbook" "$STUB_LOG"
+}
+
+@test "an agent name that would not make a usable launcher is refused" {
+    write_conf
+    printf 'agents=../etc/codex:/opt/codex\n' >> "$ROOST_CONF"
+    run "$ROOST" install
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"usable agent name"* ]]
+}
+
+@test "doctor names an extra agent whose launcher is not installed" {
+    write_conf
+    printf 'agents=frobnicate:/usr/bin/true\n' >> "$ROOST_CONF"
+    run "$ROOST" doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"frobnicate"* ]]
+    [[ "$output" == *"roost install"* ]]
+}

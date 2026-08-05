@@ -32,6 +32,9 @@ usage() {
 set_defaults() {
 	egress_profile=pinned agent_command=/usr/local/bin/claude
 	project_dir="$HOME/work"
+	# Further agents, `name:command` separated by commas. Each one gets a
+	# launcher of its own — see agents_json below.
+	agents=""
 }
 
 load_conf() {
@@ -58,6 +61,38 @@ check_conf() {
 		pinned | proxied | direct) ;;
 		*) die "egress_profile is '$egress_profile' — expected pinned, proxied or direct" ;;
 	esac
+	agents_json >/dev/null
+}
+
+# agents_json prints the extra agents as JSON for ansible.
+#
+#   agents=codex:/home/dms/.local/bin/codex,qwen:/usr/local/bin/qwen
+#
+# Each becomes a launcher named after it (`codex-safe`), which starts that
+# binary in the same group, through the same proxy, under the same profile as
+# the main agent. The name goes into a file name and a launcher name, so it is
+# checked here rather than left to produce a path nobody meant.
+agents_json() {
+	local first=1 entry name command
+	local -a list=()
+	# Split on commas without letting the shell glob a path on the way.
+	IFS=',' read -ra list <<<"$agents"
+	printf '{'
+	for entry in "${list[@]}"; do
+		[ -n "$entry" ] || continue
+		name="${entry%%:*}" command="${entry#*:}"
+		case "$name" in
+			"" | *[!A-Za-z0-9_-]*) die "agents: '$name' is not a usable agent name (letters, digits, - and _)" ;;
+		esac
+		# No colon at all leaves command equal to the whole entry.
+		if [ "$command" = "$entry" ] || [ -z "$command" ]; then
+			die "agents: '$entry' has no command — expected name:/path/to/binary"
+		fi
+		[ $first -eq 1 ] || printf ','
+		first=0
+		printf '"%s":"%s"' "$name" "$command"
+	done
+	printf '}\n'
 }
 
 cmd_setup() {
@@ -70,6 +105,11 @@ cmd_setup() {
 egress_profile=${profile:-pinned}
 agent_command=${agent:-/usr/local/bin/claude}
 project_dir=$HOME/work
+# Further agents, name:command, comma-separated. Each gets a launcher of its
+# own — 'codex' below would install /usr/local/bin/codex-safe — sharing the
+# group, the proxy and the profile with the agent above.
+#   agents=codex:/home/you/.local/bin/codex
+agents=
 EOF
 	ok "wrote $CONF"
 	log "next: roost install"
@@ -96,7 +136,8 @@ cmd_install() {
 		-e "egress_sandbox_agent_command=$agent_command" \
 		-e "agent_sessions_user=$(id -un)" \
 		-e "agent_sessions_project_dir=$project_dir" \
-		-e "{\"egress_sandbox_users\": [\"$(id -un)\"]}"
+		-e "{\"egress_sandbox_users\": [\"$(id -un)\"]}" \
+		-e "{\"egress_sandbox_agents\": $(agents_json)}"
 
 	ok "the sandbox is configured"
 	log "next: roost doctor"
@@ -268,6 +309,28 @@ cmd_doctor() {
 			   failed=1 ;;
 		esac
 	fi
+
+	# Each extra agent is a launcher plus the file naming its binary, and a
+	# missing binary is the failure that looks like nothing happening: the
+	# launcher exits, and a session started for it closes at once.
+	local entry name command launcher
+	local -a list=()
+	IFS=',' read -ra list <<<"$agents"
+	for entry in "${list[@]}"; do
+		[ -n "$entry" ] || continue
+		name="${entry%%:*}" command="${entry#*:}"
+		launcher="/usr/local/bin/$name-safe"
+		if [ ! -L "$launcher" ]; then
+			bad "$launcher is missing — the agent '$name' has no launcher"
+			echo "      fix: roost install"
+			failed=1
+		elif [ ! -x "$command" ]; then
+			bad "$launcher points at $command, which is not executable here"
+			failed=1
+		else
+			ok "the agent '$name' can be started as $name-safe"
+		fi
+	done
 
 	if tmux list-sessions >/dev/null 2>&1; then
 		ok "tmux is answering"

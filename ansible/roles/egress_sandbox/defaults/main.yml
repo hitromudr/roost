@@ -23,6 +23,24 @@ egress_sandbox_users: []
 # not care what it is.
 egress_sandbox_agent_command: /usr/local/bin/claude
 
+# Further agents, each reachable under its own launcher name: the key is the
+# agent's name, the value is the binary it starts.
+#
+#   egress_sandbox_agents:
+#     codex: /home/dms/.local/bin/codex
+#
+# gives /usr/local/bin/codex-safe — a link to the same launcher, which reads
+# the binary from /etc/roost/agents/codex.env and takes the group, the proxy
+# and the profile from the machine's own configuration. One group for all of
+# them: the policy is identical, and a second group would be a second thing to
+# keep in step for no gain (see docs/superpowers/specs/2026-08-04-second-agent).
+egress_sandbox_agents: {}
+
+# What those launchers are called. `-safe` is the name the wrappers on these
+# machines already carry, so the habit transfers.
+egress_sandbox_agent_suffix: "-safe"
+egress_sandbox_agent_dir: /etc/roost/agents
+
 # Credentials live in a file with 0600 permissions, not in the playbook and
 # not in the wrapper. Leave _proxy_url empty and the role writes a template
 # you fill in by hand; set it (from a vault, or --extra-vars) and the role

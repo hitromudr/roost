@@ -34,6 +34,21 @@ The `pinned` and `proxied` profiles need `PROXY_URL` in
 `/etc/roost/agent-proxy.env` (0640, owned by the agent's account). Without it
 the agent has **no network at all**, and `doctor` says so in as many words.
 
+### A second agent is another name, not another wrapper
+
+The `agents=` line in `roost.conf` lists the rest of them, `name:command`,
+comma-separated:
+
+```
+agents=codex:/home/you/.local/bin/codex
+```
+
+`roost install` then installs `/usr/local/bin/codex-safe` — a link to the same
+`agent-run` — and `/etc/roost/agents/codex.env`, which names the binary and
+nothing else. The group, the proxy and the profile stay the machine's: one
+policy for every agent on it, rather than a copy per agent. A wrapper per agent
+would be a copy of that policy per agent, and copies drift apart.
+
 ## What the roles do
 
 | Role | What |

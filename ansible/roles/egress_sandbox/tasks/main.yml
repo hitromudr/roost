@@ -50,6 +50,31 @@
     dest: /etc/roost/agent-run.env
     mode: "0644"
 
+# A second agent is a second name for the same launcher: the link's own name
+# picks the file below, and everything else it uses is the machine's. Nothing
+# is created when no extra agents are declared, so a stand that knows one agent
+# keeps the layout it had.
+- name: Create the directory for the extra agents
+  ansible.builtin.file:
+    path: "{{ egress_sandbox_agent_dir }}"
+    state: directory
+    mode: "0755"
+  when: egress_sandbox_agents | length > 0
+
+- name: Name each extra agent's binary
+  ansible.builtin.template:
+    src: agent.env.j2
+    dest: "{{ egress_sandbox_agent_dir }}/{{ item.key }}.env"
+    mode: "0644"
+  loop: "{{ egress_sandbox_agents | dict2items }}"
+
+- name: Install a launcher for each extra agent
+  ansible.builtin.file:
+    src: "{{ egress_sandbox_wrapper }}"
+    dest: "{{ egress_sandbox_wrapper | dirname }}/{{ item.key }}{{ egress_sandbox_agent_suffix }}"
+    state: link
+  loop: "{{ egress_sandbox_agents | dict2items }}"
+
 - name: Ensure the credentials directory exists
   ansible.builtin.file:
     path: "{{ egress_sandbox_env_file | dirname }}"

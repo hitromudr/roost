@@ -2,8 +2,25 @@
 
 Date: 2026-08-04. Written on the stand (rpi5), to be continued on the laptop.
 
-Status: **design notes, nothing implemented.** No package installed, no role
-changed. Three decisions are the operator's and are listed at the end.
+Status: **step 2 of the order of work is done** (2026-08-05, on the stand);
+the rest is still design notes. Codex itself is installed and logged in — by
+`dotfiles/install-codex.sh`, not by roost, which owns only what it installs.
+
+What shipped, and where it differs from the sketch below: the agent is chosen
+by **the name the launcher is invoked as** — `/usr/local/bin/codex-safe`, a
+link to `agent-run`, reading `/etc/roost/agents/codex.env` — rather than by
+`agent-run -a <name>`. The flag was the wrong shape: Codex has an `-a` of its
+own (`-a never`, its approval policy), and a launcher that eats it would take
+the flag the agent was meant to get. `-safe` also matches the wrapper names
+both machines already carry for Claude, so the habit transfers.
+
+One correction the first run produced: a named launcher must ignore an
+inherited `AGENT_COMMAND`. Every session an agent opens carries the one that
+started it, so `codex-safe` run inside a Claude session started Claude and
+reported its version. The name outranks the environment — the only place where
+it does.
+
+Three decisions are still the operator's and are listed at the end.
 
 ## Why now
 
