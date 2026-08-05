@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # roost — a confined place for CLI coding agents to run.
 #
+#   roost up        the whole thing: agent, sandbox, terminal, QR code
 #   roost setup     answer a few questions, write roost.conf
 #   roost install   apply the configuration to this machine
+#   roost agent     install the agent binary if it is not here yet
+#   roost terminal  put a web terminal on this machine (only if there is none)
+#   roost expose    serve that terminal over TLS, and say at what address
+#   roost qr        print the QR code your phone opens
 #   roost doctor    check that the sandbox is what it claims to be
 #   roost projects [--list]         check out the repositories in projects.conf
 #   roost uninstall [--purge]       remove roost from this machine
@@ -10,12 +15,26 @@
 # Everything it does is an ansible role underneath; this wrapper exists so
 # that the common path is one command and the questions are asked once.
 #
-# Reaching the machine from outside is deliberately not here — see README.
+# `install` is deliberately unchanged: the sandbox, the sessions and the
+# environment, and nothing that touches a terminal or a front door. The
+# machines already running roost call it, and a command that grew new
+# responsibilities would break them on their next update. The pieces added in
+# 2026-08 are their own commands, and `up` is the sequence.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF="${ROOST_CONF:-$ROOT/roost.conf}"
 PROXY_ENV="${ROOST_PROXY_ENV:-/etc/roost/agent-proxy.env}"
+AGENT_STATE="${ROOST_AGENT_STATE:-/etc/roost/agent.env}"
+AGENT_RUN_ENV="${ROOST_AGENT_RUN_ENV:-/etc/roost/agent-run.env}"
+TERMINAL_STATE="${ROOST_TERMINAL_STATE:-/etc/roost/terminal.env}"
+EXPOSE_STATE="${ROOST_EXPOSE_STATE:-/etc/roost/expose.env}"
+TERMINAL_ENV="${ROOST_TERMINAL_ENV:-/etc/pockterm/pockterm.env}"
+# The terminal draws its own QR code, so roost does not carry one. Named as a
+# variable because a stand may keep the binary somewhere else — and because a
+# test has to be able to ask what happens when it is not installed, on a
+# machine where it is.
+POCKTERM_BIN="${ROOST_POCKTERM_BIN:-pockterm}"
 
 log()  { printf '\033[1;34m[roost]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m  ✓\033[0m %s\n' "$*"; }
@@ -24,7 +43,7 @@ bad()  { printf '\033[1;31m  ✗\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[roost]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
-	sed -n '2,10p' "$ROOT/roost" | sed 's/^# \{0,1\}//'
+	sed -n '2,13p' "$ROOT/roost" | sed 's/^# \{0,1\}//'
 }
 
 # --- configuration ------------------------------------------------------
@@ -35,6 +54,22 @@ set_defaults() {
 	# Further agents, `name:command` separated by commas. Each one gets a
 	# launcher of its own — see agents_json below.
 	agents=""
+	# The proxy the sandbox reaches the internet through. Empty leaves
+	# whatever is already in $PROXY_ENV alone, which is how a machine
+	# configured by hand keeps its credentials.
+	proxy_url=""
+	# Let roost install the agent binary when there is none.
+	agent_install=true
+	# The web terminal, and the way in to it.
+	terminal=true
+	listen=127.0.0.1:8130
+	# Empty derives a name from this machine's address through sslip.io, so a
+	# machine with no domain still gets a real certificate.
+	public_host=""
+	tls_port=8443
+	# Contact address for Let's Encrypt. Empty registers without one, which
+	# means no mail when a certificate is about to expire.
+	email=""
 }
 
 load_conf() {
@@ -96,27 +131,127 @@ agents_json() {
 }
 
 cmd_setup() {
-	local profile agent
+	local profile agent proxy host
 	log "a few questions; answers go to $CONF and are not asked again"
 	read -rp "  egress profile [pinned/proxied/direct] (pinned): " profile
-	read -rp "  agent command (/usr/local/bin/claude): " agent
+	read -rp "  agent command, or blank to have roost install one: " agent
+	if [ "${profile:-pinned}" != direct ]; then
+		# Asked here rather than left as homework: on the pinned and proxied
+		# profiles a stand without a proxy has no network at all, and that is
+		# the failure that looks like a broken agent.
+		read -rp "  proxy the agent goes out through (http://user:pass@host:port): " proxy
+	fi
+	read -rp "  domain that points at this machine, or blank for an sslip.io name: " host
 	cat > "$CONF" <<EOF
 # Written by 'roost setup'. Edit freely; 'roost install' reads it.
 egress_profile=${profile:-pinned}
-agent_command=${agent:-/usr/local/bin/claude}
+agent_command=${agent:-}
 project_dir=$HOME/work
 # Further agents, name:command, comma-separated. Each gets a launcher of its
 # own — 'codex' below would install /usr/local/bin/codex-safe — sharing the
 # group, the proxy and the profile with the agent above.
 #   agents=codex:/home/you/.local/bin/codex
 agents=
+# The way out. Written into $PROXY_ENV (0640) by 'roost install'; leave it
+# empty here and whatever is already in that file is kept.
+proxy_url=${proxy:-}
+# The web terminal and its address. roost installs a terminal only where there
+# is none — a machine that already has one keeps its owner.
+terminal=true
+listen=127.0.0.1:8130
+public_host=${host:-}
+tls_port=8443
+email=
 EOF
 	ok "wrote $CONF"
-	log "next: roost install"
-	if [ "${profile:-pinned}" != direct ]; then
-		log "the pinned and proxied profiles need PROXY_URL in $PROXY_ENV —"
-		log "without it the agent has no network at all"
+	log "next: roost up"
+	if [ "${profile:-pinned}" != direct ] && [ -z "${proxy:-}" ]; then
+		warn "no proxy given: on the '${profile:-pinned}' profile the agent has no network at all"
+		warn "put PROXY_URL in $PROXY_ENV, or set proxy_url in $CONF and re-run 'roost install'"
 	fi
+}
+
+# set_conf rewrites one key in the config file, so a value roost worked out for
+# itself — the path an installer chose for the agent, say — is recorded where
+# the operator can read and change it, rather than derived again on every run.
+set_conf() {
+	local key="$1" value="$2"
+	[ -f "$CONF" ] || die "no $CONF to write $key into"
+	if grep -q "^$key=" "$CONF"; then
+		# The value can contain slashes and other regex punctuation, so it is
+		# substituted through a here-doc rather than sed's replacement text.
+		local tmp; tmp="$(mktemp)"
+		while IFS= read -r line; do
+			case "$line" in
+				"$key="*) printf '%s=%s\n' "$key" "$value" ;;
+				*) printf '%s\n' "$line" ;;
+			esac
+		done < "$CONF" > "$tmp"
+		mv "$tmp" "$CONF"
+	else
+		printf '%s=%s\n' "$key" "$value" >> "$CONF"
+	fi
+}
+
+# read_state prints one KEY's value from a file roost's roles wrote. Those
+# files live under /etc and some are readable only by root, so the fallback is
+# sudo rather than a failure.
+read_state() {
+	local key="$1" file="$2"
+	if [ -r "$file" ]; then
+		sed -n "s/^$key=//p" "$file" | tail -n1
+	elif [ -e "$file" ] || sudo -n test -e "$file" 2>/dev/null; then
+		sudo sed -n "s/^$key=//p" "$file" 2>/dev/null | tail -n1
+	fi
+}
+
+# --- ansible, which may not be here yet ---------------------------------
+# The first thing a fresh machine is missing. Left as an error message, "one
+# command" starts with a trip to the package manager — so this installs it, out
+# loud, and only what is needed: the roles use ansible.builtin only, and the
+# `systemd` module they call has been there since core 2.10.
+ensure_ansible() {
+	command -v ansible-playbook >/dev/null && return 0
+	[ -z "${ROOST_NO_BOOTSTRAP:-}" ] ||
+		die "ansible is not installed, and ROOST_NO_BOOTSTRAP is set"
+
+	local install=""
+	if command -v apt-get >/dev/null; then install="apt-get install -y ansible-core"
+	elif command -v dnf >/dev/null; then install="dnf install -y ansible-core"
+	elif command -v pacman >/dev/null; then install="pacman -S --noconfirm ansible"
+	elif command -v zypper >/dev/null; then install="zypper install -y ansible"
+	elif command -v apk >/dev/null; then install="apk add ansible"
+	else die "ansible is not installed and no known package manager to install it with"
+	fi
+
+	log "ansible is not here yet — installing it: sudo $install"
+	if command -v apt-get >/dev/null; then
+		sudo apt-get update -qq || true
+	fi
+	# shellcheck disable=SC2086 # the command is ours, word splitting is intended
+	sudo $install || die "could not install ansible — install it yourself and re-run"
+	command -v ansible-playbook >/dev/null || die "ansible still is not on PATH after installing it"
+	ok "ansible $(ansible-playbook --version | head -1 | sed 's/^ansible-playbook //')"
+}
+
+# run_playbook runs one of roost's playbooks against this machine. The
+# inventory is written each time rather than kept: a stand configures itself,
+# and a file listing "localhost" is not worth leaving behind for somebody to
+# find and wonder about.
+# Cleaning up by hand rather than with `trap ... RETURN`: a RETURN trap is not
+# scoped to the function that sets it, so the next function called replaces it —
+# and the file the caller meant to remove stays behind. Measured, after writing
+# it the other way: with a RETURN trap in this function, the temporary file
+# holding the proxy password in cmd_install was still in /tmp afterwards.
+run_playbook() {
+	local playbook="$1"; shift
+	ensure_ansible
+	local inv rc=0
+	inv="${TMPDIR:-/tmp}/roost-inventory.$$"
+	printf '[stand]\nlocalhost ansible_connection=local\n' > "$inv"
+	ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/$playbook" "$@" || rc=$?
+	rm -f "$inv"
+	return "$rc"
 }
 
 # --- install ------------------------------------------------------------
@@ -124,23 +259,186 @@ EOF
 cmd_install() {
 	load_conf
 	check_conf
-	command -v ansible-playbook >/dev/null || die "ansible is not installed"
 
-	local inv="${TMPDIR:-/tmp}/roost-inventory.$$"
-	printf '[stand]\nlocalhost ansible_connection=local\n' > "$inv"
-	trap 'rm -f "$inv"' RETURN
+	# The proxy password does not go on a command line: every account on the
+	# machine can read /proc/<pid>/cmdline while the run lasts. A 0600 vars
+	# file passed as -e @file keeps it out of the process list, and the role
+	# writing it is no_log already.
+	local vars="" rc=0
+	if [ -n "$proxy_url" ]; then
+		vars="${TMPDIR:-/tmp}/roost-vars.$$"
+		(umask 077; printf 'egress_sandbox_proxy_url: "%s"\n' "$proxy_url" > "$vars")
+		# EXIT, not RETURN, and expanded now rather than later: an interrupted
+		# run must not leave the proxy password in /tmp, and by the time an EXIT
+		# trap fires this function's variables are gone.
+		# shellcheck disable=SC2064
+		trap "rm -f '$vars'" EXIT
+	fi
 
 	log "applying the configuration"
-	ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/stand.yml" \
+	run_playbook stand.yml --tags egress,sessions,env \
 		-e "egress_sandbox_profile=$egress_profile" \
-		-e "egress_sandbox_agent_command=$agent_command" \
+		-e "egress_sandbox_agent_command=$(resolved_agent_command)" \
 		-e "agent_sessions_user=$(id -un)" \
 		-e "agent_sessions_project_dir=$project_dir" \
 		-e "{\"egress_sandbox_users\": [\"$(id -un)\"]}" \
-		-e "{\"egress_sandbox_agents\": $(agents_json)}"
+		-e "{\"egress_sandbox_agents\": $(agents_json)}" \
+		${vars:+-e "@$vars"}
 
 	ok "the sandbox is configured"
 	log "next: roost doctor"
+}
+
+# resolved_agent_command answers "which binary does a session start?".
+#
+# The config file wins, because a value somebody typed is a decision. When it is
+# empty, the answer is whatever `roost agent` recorded — which is the normal
+# case on a machine where roost installed the agent itself, and it matters that
+# the launcher gets that path rather than the default: a launcher pointing at a
+# binary that is not there gives a session that closes the instant it opens.
+resolved_agent_command() {
+	if [ -n "$agent_command" ]; then
+		printf '%s\n' "$agent_command"
+		return 0
+	fi
+	local installed; installed="$(read_state AGENT_INSTALLED_COMMAND "$AGENT_STATE")"
+	printf '%s\n' "${installed:-/usr/local/bin/claude}"
+}
+
+# --- the agent, the terminal, the way in --------------------------------
+# Three commands rather than three more responsibilities for `install`: each
+# touches something the machine may already have an owner for, and each says so
+# rather than assuming.
+
+cmd_agent() {
+	load_conf
+	log "making sure there is an agent to sandbox"
+	run_playbook stand.yml --tags agent \
+		-e "agent_cli_user=$(id -un)" \
+		-e "agent_cli_install=$agent_install" \
+		${agent_command:+-e "agent_cli_command=$agent_command"} \
+		${proxy_url:+-e "agent_cli_proxy_url=$proxy_url"}
+
+	# Recorded in the config file, not just in /etc: the next `roost install`
+	# reads it from there, and the operator can see what was chosen.
+	local found; found="$(read_state AGENT_INSTALLED_COMMAND "$AGENT_STATE")"
+	if [ -n "$found" ] && [ "$found" != "$agent_command" ]; then
+		set_conf agent_command "$found"
+		ok "agent_command=$found (written to $CONF)"
+	fi
+}
+
+cmd_terminal() {
+	load_conf
+	case "$terminal" in
+		true | yes | 1) ;;
+		*) log "terminal=$terminal in $CONF — not installing one"; return 0 ;;
+	esac
+	log "installing the web terminal"
+	run_playbook stand.yml --tags terminal \
+		-e "terminal_user=$(id -un)" \
+		-e "terminal_listen=$listen" \
+		-e "terminal_project_dir=$project_dir" \
+		${ROOST_POCKTERM_SRC:+-e "terminal_src=$ROOST_POCKTERM_SRC"} \
+		${ROOST_POCKTERM_REPO:+-e "terminal_repo=$ROOST_POCKTERM_REPO"}
+	ok "the terminal answers on $listen"
+}
+
+cmd_expose() {
+	load_conf
+	local assume_yes="" front=auto
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--yes | -y) assume_yes=1 ;;
+			--print) front=print ;;
+			--host) shift; public_host="${1:-}" ;;
+			--email) shift; email="${1:-}" ;;
+			*) die "unknown option $1 (expected --yes, --print, --host, --email)" ;;
+		esac
+		shift
+	done
+
+	# The one outward-facing step, and the one that touches a service roost may
+	# not own. Asked once, plainly, with what is behind the address.
+	if [ "$front" != print ] && [ -z "$assume_yes" ]; then
+		cat <<EOF
+This publishes the terminal at ${public_host:-an sslip.io name for this machine}:${tls_port}
+
+  · roost adds one nginx file (/etc/nginx/conf.d/roost-terminal.conf) and
+    reloads nginx — every other file on this machine stays as it is
+  · a certificate is requested from Let's Encrypt for that name
+  · behind the address is a full shell as $(id -un), reached with the token
+    in the URL your phone saves. Treat it like SSH.
+
+EOF
+		local reply
+		read -rp "Proceed? [y/N] " reply
+		case "$reply" in y | Y | yes) ;; *) die "cancelled" ;; esac
+	fi
+
+	run_playbook stand.yml --tags expose \
+		-e "expose_front=$front" \
+		-e "expose_upstream=$listen" \
+		-e "expose_tls_port=$tls_port" \
+		-e "expose_reload_allowed=true" \
+		-e "expose_terminal_user=$(id -un)" \
+		${public_host:+-e "expose_host=$public_host"} \
+		${email:+-e "expose_email=$email"}
+
+	local url; url="$(read_state EXPOSE_URL "$EXPOSE_STATE")"
+	[ -z "$url" ] || ok "the terminal is reachable at $url"
+}
+
+# cmd_qr ends the install with something to point a camera at. The pieces come
+# from the files the roles wrote — the address from roost's, the token from
+# pockterm's — and the code itself from pockterm, which already knows how to
+# draw one.
+cmd_qr() {
+	local url token
+	url="$(read_state EXPOSE_URL "$EXPOSE_STATE")"
+	[ -n "$url" ] || die "nothing published yet — run 'roost expose' first"
+	token="$(read_state POCKTERM_TOKEN "$TERMINAL_ENV")"
+	command -v "$POCKTERM_BIN" >/dev/null ||
+		die "$POCKTERM_BIN is not installed — run 'roost terminal'"
+
+	log "scan this with the phone you want the terminal on"
+	POCKTERM_PUBLIC_URL="$url" POCKTERM_TOKEN="$token" "$POCKTERM_BIN" qr
+	echo
+	if [ -n "$token" ]; then
+		echo "  The token is in that URL, so it is also in your phone's history"
+		echo "  and in the front's logs. For something you keep, put client"
+		echo "  certificates in front instead — see README."
+	fi
+	echo "  On the phone: open it, then \"Add to home screen\"."
+}
+
+# cmd_up is the one command the README promises. Each step is the command above
+# it, in the order a machine needs them: an agent to sandbox, a sandbox around
+# it, a terminal to reach it through, a way in, and a code to scan.
+cmd_up() {
+	local assume_yes=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--yes | -y) assume_yes=1 ;;
+			--host) shift; ROOST_HOST="${1:-}" ;;
+			--email) shift; ROOST_EMAIL="${1:-}" ;;
+			*) die "unknown option $1 (expected --yes, --host, --email)" ;;
+		esac
+		shift
+	done
+
+	[ -f "$CONF" ] || cmd_setup
+	load_conf
+	[ -z "${ROOST_HOST:-}" ] || set_conf public_host "$ROOST_HOST"
+	[ -z "${ROOST_EMAIL:-}" ] || set_conf email "$ROOST_EMAIL"
+
+	cmd_agent
+	cmd_install
+	cmd_terminal
+	cmd_expose ${assume_yes:+--yes}
+	cmd_doctor || warn "doctor found something — the lines above say what"
+	echo
+	cmd_qr
 }
 
 # --- projects -----------------------------------------------------------
@@ -191,13 +489,8 @@ cmd_projects() {
 	fi
 	[ "$list" != "[]" ] || { log "no projects listed in $PROJECTS_CONF"; return 0; }
 
-	command -v ansible-playbook >/dev/null || die "ansible is not installed"
-	local inv="${TMPDIR:-/tmp}/roost-inventory.$$"
-	printf '[stand]\nlocalhost ansible_connection=local\n' > "$inv"
-	trap 'rm -f "$inv"' RETURN
-
 	log "bringing this machine up to $PROJECTS_CONF"
-	ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/projects.yml" \
+	run_playbook projects.yml \
 		-e "projects_user=$(id -un)" \
 		-e "projects_dir=$project_dir" \
 		-e "{\"projects_list\": $list}"
@@ -219,15 +512,26 @@ cmd_uninstall() {
 		shift
 	done
 
+	# What goes depends on what roost put there, and the state files are the
+	# record of that. A machine whose terminal predates roost keeps it, and
+	# says so here rather than after the fact.
+	local had_terminal="" had_expose=""
+	[ -z "$(read_state TERMINAL_UNIT "$TERMINAL_STATE")" ] || had_terminal=1
+	[ -z "$(read_state EXPOSE_VHOST "$EXPOSE_STATE")" ] || had_expose=1
+
 	cat <<EOF
 This removes from $(hostname):
   · the egress rules and their unit
   · the agent launcher and the session helper
   · /etc/roost
+$( [ -n "$had_terminal" ] && echo "  · the web terminal roost installed, and its unit" )
+$( [ -n "$had_expose" ] && echo "  · roost's nginx file, followed by a reload" )
 
 It keeps:
   · your projects and any running tmux sessions
-  · anything else on this machine — a web terminal, a tunnel, your shell
+  · the agent binary, and whatever it is logged in as
+$( [ -n "$had_expose" ] && echo "  · the certificate (still valid; delete it with certbot if you want it gone)" )
+  · anything else on this machine — another terminal, a tunnel, your shell
   · $( [ -n "$purge" ] && echo "nothing else — --purge was given" \
         || echo "the sandbox group (use --purge to remove it)" )
 EOF
@@ -242,13 +546,7 @@ EOF
 		case "$reply" in y | Y | yes) ;; *) die "cancelled" ;; esac
 	fi
 
-	command -v ansible-playbook >/dev/null || die "ansible is not installed"
-	local inv="${TMPDIR:-/tmp}/roost-inventory.$$"
-	printf '[stand]\nlocalhost ansible_connection=local\n' > "$inv"
-	trap 'rm -f "$inv"' RETURN
-
-	ansible-playbook -i "$inv" "$ROOT/ansible/playbooks/teardown.yml" \
-		${purge:+-e roost_purge=true}
+	run_playbook teardown.yml ${purge:+-e roost_purge=true}
 
 	# The config is roost's own; with the machine cleaned it only misleads.
 	if [ -n "$purge" ] && [ -f "$CONF" ]; then
@@ -332,6 +630,87 @@ cmd_doctor() {
 		fi
 	done
 
+	# The agent itself, which every other check here assumes. A path in the
+	# config that is not an executable is the same failure as a missing
+	# launcher, seen from the other end.
+	local agent; agent="$(resolved_agent_command)"
+	if [ -x "$agent" ]; then
+		ok "the agent is $agent"
+	else
+		bad "$agent is not an executable file — sessions started for it will close at once"
+		echo "      fix: roost agent"
+		failed=1
+	fi
+
+	# Does the sandbox actually reach the provider? The two checks above prove
+	# a policy exists and a proxy is named; this one is the only one that
+	# proves the combination works, and it is the difference between a stand
+	# and a stand-shaped set of files. Run inside the group, so it answers the
+	# question the agent will ask.
+	if [ "$egress_profile" != direct ] && command -v curl >/dev/null; then
+		local group code
+		group="$(sed -n 's/^AGENT_GROUP=//p' "$AGENT_RUN_ENV" 2>/dev/null | tail -n1)"
+		if [ -n "$group" ] && grep -qs '^PROXY_URL=..*' "$PROXY_ENV"; then
+			# 401 is the wanted answer: the request arrived and was told it
+			# needs credentials. Anything else means it did not arrive.
+			# </dev/null because `sg` asks for the group's password when the
+			# caller is not a member — and a diagnostic that hangs waiting for
+			# a password nobody set is worse than one that says nothing.
+			code="$(sg "$group" -c "set -a; . $PROXY_ENV; export HTTPS_PROXY=\$PROXY_URL; curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://api.anthropic.com/v1/models" </dev/null 2>/dev/null || true)"
+			case "$code" in
+				401 | 200)
+					ok "the sandbox reaches the provider through its proxy (HTTP $code)" ;;
+				000 | "")
+					bad "nothing answered through the proxy — the agent will fail on its first request"
+					echo "      fix: check PROXY_URL in $PROXY_ENV, and that the proxy is up"
+					failed=1 ;;
+				*)
+					warn "the provider answered HTTP $code through the proxy — expected 401"
+					echo "      a 403 here usually means the proxy's own exit address is blocked" ;;
+			esac
+		fi
+	fi
+
+	# The terminal, and the address a phone opens. Both are optional — a stand
+	# reached over ssh needs neither — so a missing one is said, not failed.
+	local t_listen; t_listen="$(read_state TERMINAL_LISTEN "$TERMINAL_STATE")"
+	if [ -n "$t_listen" ]; then
+		if systemctl is-active --quiet pockterm 2>/dev/null; then
+			ok "the web terminal is running on $t_listen"
+		else
+			bad "the web terminal is installed but not running"
+			echo "      fix: systemctl status pockterm; journalctl -u pockterm"
+			failed=1
+		fi
+		# The join between the phone's buttons and the sandbox. Present and
+		# wrong is the failure that looks like success: buttons work, sessions
+		# start, nothing is sandboxed.
+		if [ "$(read_state CLAUDE "$TERMINAL_ENV")" = "/usr/local/bin/agent-run" ]; then
+			ok "sessions started from the phone go through the sandbox"
+		else
+			bad "CLAUDE in $TERMINAL_ENV does not point at agent-run — the phone's buttons start unsandboxed agents"
+			echo "      fix: roost terminal"
+			failed=1
+		fi
+	fi
+
+	local url; url="$(read_state EXPOSE_URL "$EXPOSE_STATE")"
+	if [ -n "$url" ] && command -v curl >/dev/null; then
+		# Checked from this machine, but through the public name and TLS: that
+		# exercises the certificate and the vhost, which is what a phone will
+		# meet. A 401 is the terminal asking for the token, i.e. working.
+		local out_code
+		out_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url/" || true)"
+		case "$out_code" in
+			200 | 401 | 403)
+				ok "$url answers with a valid certificate (HTTP $out_code)" ;;
+			*)
+				bad "$url did not answer (HTTP ${out_code:-none})"
+				echo "      fix: nginx -t; systemctl status nginx; and check the name still resolves here"
+				failed=1 ;;
+		esac
+	fi
+
 	if tmux list-sessions >/dev/null 2>&1; then
 		ok "tmux is answering"
 	else
@@ -342,8 +721,13 @@ cmd_doctor() {
 }
 
 case "${1:-help}" in
+	up)        shift; cmd_up "$@" ;;
 	setup)     shift; cmd_setup "$@" ;;
 	install)   shift; cmd_install "$@" ;;
+	agent)     shift; cmd_agent "$@" ;;
+	terminal)  shift; cmd_terminal "$@" ;;
+	expose)    shift; cmd_expose "$@" ;;
+	qr)        shift; cmd_qr "$@" ;;
 	projects)  shift; cmd_projects "$@" ;;
 	uninstall) shift; cmd_uninstall "$@" ;;
 	doctor)    shift; cmd_doctor "$@" ;;

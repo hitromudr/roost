@@ -298,3 +298,179 @@ write_projects() {
     [[ "$output" == *"frobnicate"* ]]
     [[ "$output" == *"roost install"* ]]
 }
+
+# --- the one command, and the pieces it is made of -----------------------
+# These cover what the wrapper decides on its own: which command starts a
+# session, what is asked before something is published, and what is refused
+# for want of a step before it. Applying the roles is the roles' own tests.
+
+@test "help mentions the one command" {
+    run "$ROOST" help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"roost up"* ]]
+}
+
+@test "the agent roost installed is what the launcher is pointed at" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=
+CONF
+    export ROOST_AGENT_STATE="$BATS_TEST_TMPDIR/agent.env"
+    printf 'AGENT_INSTALLED_COMMAND=/opt/agents/claude\n' > "$ROOST_AGENT_STATE"
+    run "$ROOST" install
+    [ "$status" -eq 0 ]
+    grep -q "egress_sandbox_agent_command=/opt/agents/claude" "$STUB_LOG"
+}
+
+@test "a command named in the config outranks what was installed" {
+    write_conf
+    export ROOST_AGENT_STATE="$BATS_TEST_TMPDIR/agent.env"
+    printf 'AGENT_INSTALLED_COMMAND=/opt/agents/claude\n' > "$ROOST_AGENT_STATE"
+    run "$ROOST" install
+    [ "$status" -eq 0 ]
+    grep -q "egress_sandbox_agent_command=/usr/local/bin/claude" "$STUB_LOG"
+}
+
+@test "the path an installer chose is written back into the config" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=
+CONF
+    export ROOST_AGENT_STATE="$BATS_TEST_TMPDIR/agent.env"
+    printf 'AGENT_INSTALLED_COMMAND=/home/x/.local/bin/claude\n' > "$ROOST_AGENT_STATE"
+    run "$ROOST" agent
+    [ "$status" -eq 0 ]
+    grep -q "^agent_command=/home/x/.local/bin/claude$" "$ROOST_CONF"
+}
+
+@test "the agent step is asked for by tag, not by running everything" {
+    write_conf
+    run "$ROOST" agent
+    [ "$status" -eq 0 ]
+    grep -q -- "--tags agent" "$STUB_LOG"
+}
+
+@test "install does not run the terminal or the way in" {
+    write_conf
+    run "$ROOST" install
+    [ "$status" -eq 0 ]
+    grep -q -- "--tags egress,sessions,env" "$STUB_LOG"
+    ! grep -q -- "--tags terminal" "$STUB_LOG"
+}
+
+@test "a stand that wants no terminal is not given one" {
+    write_conf
+    printf 'terminal=false\n' >> "$ROOST_CONF"
+    run "$ROOST" terminal
+    [ "$status" -eq 0 ]
+    ! grep -q "ansible-playbook" "$STUB_LOG"
+}
+
+@test "publishing is not done without being asked" {
+    write_conf
+    run "$ROOST" expose < /dev/null
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"full shell"* ]]
+    ! grep -q "ansible-playbook" "$STUB_LOG"
+}
+
+@test "publishing with --yes says which port and which upstream" {
+    write_conf
+    printf 'listen=127.0.0.1:8130\ntls_port=9443\n' >> "$ROOST_CONF"
+    run "$ROOST" expose --yes
+    [ "$status" -eq 0 ]
+    grep -q "expose_tls_port=9443" "$STUB_LOG"
+    grep -q "expose_upstream=127.0.0.1:8130" "$STUB_LOG"
+}
+
+@test "a host given on the command line wins over the config" {
+    write_conf
+    printf 'public_host=from.conf\n' >> "$ROOST_CONF"
+    run "$ROOST" expose --yes --host from.flag
+    [ "$status" -eq 0 ]
+    grep -q "expose_host=from.flag" "$STUB_LOG"
+}
+
+@test "printing what to add asks nobody and changes nothing" {
+    write_conf
+    run "$ROOST" expose --print < /dev/null
+    [ "$status" -eq 0 ]
+    grep -q "expose_front=print" "$STUB_LOG"
+}
+
+@test "an unknown expose option is refused" {
+    write_conf
+    run "$ROOST" expose --sideways
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--sideways"* ]]
+}
+
+@test "a QR code before anything is published says what is missing" {
+    write_conf
+    export ROOST_EXPOSE_STATE="$BATS_TEST_TMPDIR/expose.env"
+    run "$ROOST" qr
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"roost expose"* ]]
+}
+
+@test "a QR code without a terminal names the step that installs one" {
+    write_conf
+    export ROOST_EXPOSE_STATE="$BATS_TEST_TMPDIR/expose.env"
+    # Named rather than absent from PATH: this suite also runs on a stand,
+    # where pockterm is installed and "not installed" cannot be arranged by
+    # leaving it out.
+    export ROOST_POCKTERM_BIN=pockterm-that-is-not-here
+    printf 'EXPOSE_URL=https://example:8443\n' > "$ROOST_EXPOSE_STATE"
+    run "$ROOST" qr
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"roost terminal"* ]]
+}
+
+@test "doctor says which binary a session would start" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=$BATS_TEST_TMPDIR/claude
+CONF
+    printf '#!/bin/sh\n' > "$BATS_TEST_TMPDIR/claude"
+    chmod +x "$BATS_TEST_TMPDIR/claude"
+    run "$ROOST" doctor
+    [[ "$output" == *"the agent is $BATS_TEST_TMPDIR/claude"* ]]
+}
+
+@test "doctor calls out an agent that is not there" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=$BATS_TEST_TMPDIR/absent
+CONF
+    run "$ROOST" doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not an executable file"* ]]
+    [[ "$output" == *"roost agent"* ]]
+}
+
+@test "doctor calls out a terminal whose buttons bypass the sandbox" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=/usr/bin/true
+CONF
+    export ROOST_TERMINAL_STATE="$BATS_TEST_TMPDIR/terminal.env"
+    export ROOST_TERMINAL_ENV="$BATS_TEST_TMPDIR/pockterm.env"
+    printf 'TERMINAL_LISTEN=127.0.0.1:8130\n' > "$ROOST_TERMINAL_STATE"
+    printf 'CLAUDE=claude\n' > "$ROOST_TERMINAL_ENV"
+    run "$ROOST" doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unsandboxed"* ]]
+}
+
+@test "doctor is satisfied when the buttons go through the launcher" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=/usr/bin/true
+CONF
+    export ROOST_TERMINAL_STATE="$BATS_TEST_TMPDIR/terminal.env"
+    export ROOST_TERMINAL_ENV="$BATS_TEST_TMPDIR/pockterm.env"
+    printf 'TERMINAL_LISTEN=127.0.0.1:8130\n' > "$ROOST_TERMINAL_STATE"
+    printf 'CLAUDE=/usr/local/bin/agent-run\n' > "$ROOST_TERMINAL_ENV"
+    run "$ROOST" doctor
+    [[ "$output" == *"go through the sandbox"* ]]
+}
