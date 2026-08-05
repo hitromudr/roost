@@ -18,7 +18,7 @@
 ## Быстрый старт
 
 ```bash
-git clone https://github.com/<owner>/roost && cd roost
+git clone https://github.com/hitromudr/roost && cd roost
 ./roost up
 ```
 

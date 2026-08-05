@@ -19,7 +19,7 @@ reach all of it from a phone.
 ## Quick start
 
 ```bash
-git clone https://github.com/<owner>/roost && cd roost
+git clone https://github.com/hitromudr/roost && cd roost
 ./roost up
 ```
 
