@@ -202,6 +202,18 @@ to the 0644 file behind it, finds the line already there, and reports
 against a throwaway fixture — the alarming diff is a check-mode artefact, not a
 world-writable config and not a second owner for a file dotfiles keeps.
 
+## Publishing
+
+Forgejo is where this is developed and GitHub is a **push mirror** of it: the
+mirror is configured on the Forgejo side (`sync_on_commit`, plus an eight-hour
+interval as a backstop), so a push to `origin` arrives on GitHub by itself.
+
+Do not push to GitHub directly. Two writers of one branch diverge, and the mirror
+resolves that by overwriting whatever it finds — so a commit pushed only to GitHub
+is a commit that disappears at the next sync. In this clone the `github` remote
+has its push URL set to `no-push` for that reason; fetching from it is fine and is
+how the mirror is checked.
+
 ## Conventions
 
 Code comments, technical documentation and commit messages are in English.
