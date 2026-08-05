@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# roost-ca — the certificate authority for the devices allowed into the terminal.
+#
+#   roost-ca init                 create the authority, if it is not there yet
+#   roost-ca issue <device>       a certificate for one device, packaged for it
+#   roost-ca list                 which devices have one, and which were revoked
+#   roost-ca revoke <device>      take one back, and rewrite the revocation list
+#   roost-ca crl                  rewrite the revocation list
+#
+# Why this exists as a script rather than as tasks in a role: an authority is
+# state, and state that only exists after a successful ansible run is state
+# nobody can test. Everything here runs against a directory given to it, so the
+# test suite exercises the real openssl calls in a temporary one — and what is
+# tested is what a stand runs.
+#
+#   ROOST_CA_DIR   where the authority lives (default /etc/roost/ca)
+#   CA_DAYS        how long the authority itself is good for
+#   CLIENT_DAYS    how long a device's certificate is good for
+#
+# The token in a URL and a certificate on a device are the two locks this
+# project offers, and they are not the same kind of thing: a token is a string
+# that has been in a browser's history and in a front's logs, and a certificate
+# cannot be read out of the phone it was installed on. What a certificate costs
+# is this file: an authority that has to be kept, and a way to take a device
+# back out when it is lost.
+set -euo pipefail
+
+CA_DIR="${ROOST_CA_DIR:-/etc/roost/ca}"
+CA_DAYS="${CA_DAYS:-3650}"
+CLIENT_DAYS="${CLIENT_DAYS:-825}"
+
+die() { printf 'roost-ca: %s\n' "$*" >&2; exit 1; }
+
+# A device name becomes a file name and a certificate subject, so it is checked
+# rather than trusted. Refusing early beats a path nobody meant.
+check_name() {
+	local name="${1:-}"
+	[ -n "$name" ] || die "which device? (a name, e.g. 'phone')"
+	case "$name" in
+		*[!A-Za-z0-9_.-]* | -* | .*) die "'$name' is not a usable device name (letters, digits, - _ .)" ;;
+	esac
+}
+
+# The openssl configuration is written rather than shipped: it names paths
+# inside CA_DIR, and a copy with the wrong paths is the kind of thing that fails
+# only when somebody tries to revoke a certificate — which is the one moment
+# nobody wants surprises.
+write_config() {
+	cat > "$CA_DIR/openssl.cnf" <<EOF
+[ ca ]
+default_ca = roost
+
+[ roost ]
+dir               = $CA_DIR
+database          = \$dir/index.txt
+new_certs_dir     = \$dir/newcerts
+certificate       = \$dir/ca.crt
+private_key       = \$dir/ca.key
+serial            = \$dir/serial
+crlnumber         = \$dir/crlnumber
+default_md        = sha256
+default_days      = $CLIENT_DAYS
+default_crl_days  = 30
+policy            = roost_policy
+email_in_dn       = no
+rand_serial       = no
+unique_subject    = no
+copy_extensions   = none
+
+[ roost_policy ]
+commonName        = supplied
+
+[ client_ext ]
+basicConstraints  = critical, CA:FALSE
+keyUsage          = critical, digitalSignature, keyEncipherment
+extendedKeyUsage  = clientAuth
+EOF
+}
+
+cmd_init() {
+	if [ -f "$CA_DIR/ca.crt" ] && [ -f "$CA_DIR/ca.key" ]; then
+		write_config
+		echo "authority already at $CA_DIR"
+		return 0
+	fi
+	# 0700 all the way: the key that lets somebody issue themselves a way in.
+	mkdir -p "$CA_DIR/newcerts" "$CA_DIR/clients"
+	chmod 700 "$CA_DIR" "$CA_DIR/newcerts" "$CA_DIR/clients"
+	: > "$CA_DIR/index.txt"
+	[ -f "$CA_DIR/serial" ] || echo 1000 > "$CA_DIR/serial"
+	[ -f "$CA_DIR/crlnumber" ] || echo 1000 > "$CA_DIR/crlnumber"
+	write_config
+
+	# No password on the key, deliberately. A password that has to be typed by
+	# whatever issues the next certificate ends up in a script or in a variable
+	# on the same machine, which protects nothing and breaks `roost enroll`.
+	# What protects it is the file mode and the machine.
+	umask 077
+	openssl genrsa -out "$CA_DIR/ca.key" 4096 2>/dev/null
+	openssl req -x509 -new -key "$CA_DIR/ca.key" -sha256 -days "$CA_DAYS" \
+		-subj "/CN=roost terminal access/O=roost" \
+		-addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+		-addext "keyUsage=critical,keyCertSign,cRLSign" \
+		-out "$CA_DIR/ca.crt" 2>/dev/null
+	chmod 600 "$CA_DIR/ca.key"
+	chmod 644 "$CA_DIR/ca.crt"
+	cmd_crl
+	echo "authority created at $CA_DIR"
+}
+
+cmd_issue() {
+	local name="${1:-}"
+	check_name "$name"
+	[ -f "$CA_DIR/ca.key" ] || die "no authority yet — run: roost-ca init"
+
+	local dir="$CA_DIR/clients"
+	local key="$dir/$name.key" csr="$dir/$name.csr" crt="$dir/$name.crt" p12="$dir/$name.p12"
+
+	umask 077
+	openssl genrsa -out "$key" 2048 2>/dev/null
+	openssl req -new -key "$key" -subj "/CN=$name/O=roost" -out "$csr" 2>/dev/null
+	# -batch because this is called from a playbook and from a wrapper; the
+	# policy above already says the only field that matters is the name.
+	openssl ca -config "$CA_DIR/openssl.cnf" -batch -notext \
+		-extensions client_ext -days "$CLIENT_DAYS" \
+		-in "$csr" -out "$crt" 2>/dev/null || die "openssl ca refused to sign for '$name' (already issued? try another name)"
+	rm -f "$csr"
+
+	# A password is not optional: Android refuses to import a PKCS#12 without
+	# one, and a phone that cannot import the file is a phone locked out of its
+	# own terminal. Printed once, on stdout, for whoever is running this — it is
+	# not kept anywhere the file is.
+	local pass
+	pass="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-12)"
+	# The algorithms are named rather than left to defaults, and not the ones a
+	# search suggests. `-legacy` is the old advice for phones, and what it
+	# actually produces is a bundle whose certificate bag is encrypted with
+	# 40-bit RC2 — which openssl 3 will not read back without its legacy
+	# provider, and which current Android and iOS importers are dropping. AES
+	# with an SHA-256 MAC is what a modern importer wants and what can be
+	# checked here.
+	openssl pkcs12 -export \
+		-keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256 \
+		-inkey "$key" -in "$crt" -certfile "$CA_DIR/ca.crt" \
+		-name "pockterm ($name)" -passout "pass:$pass" -out "$p12" 2>/dev/null ||
+		die "could not package the certificate for '$name'"
+	chmod 600 "$p12" "$key" "$crt"
+
+	printf 'file=%s\npassword=%s\n' "$p12" "$pass"
+}
+
+cmd_list() {
+	[ -f "$CA_DIR/index.txt" ] || die "no authority yet — run: roost-ca init"
+	# index.txt is openssl's own database: V or R, then dates, serial, path, and
+	# the subject last. The name is what a person asked for, so that is what
+	# this prints.
+	awk -F'\t' '
+		{
+			state = ($1 == "R") ? "revoked" : "valid"
+			name = $6
+			sub(/^.*CN=/, "", name)
+			sub(/\/.*$/, "", name)
+			printf "%-10s %s\n", state, name
+		}
+	' "$CA_DIR/index.txt"
+}
+
+cmd_revoke() {
+	local name="${1:-}"
+	check_name "$name"
+	local crt="$CA_DIR/clients/$name.crt"
+	[ -f "$crt" ] || die "no certificate for '$name' here (see: roost-ca list)"
+	openssl ca -config "$CA_DIR/openssl.cnf" -batch -revoke "$crt" 2>/dev/null ||
+		die "openssl ca refused to revoke '$name'"
+	cmd_crl
+	# The device's own files go too: leaving a .p12 whose certificate is
+	# revoked is leaving a file that looks like a way in.
+	rm -f "$CA_DIR/clients/$name.p12" "$CA_DIR/clients/$name.key"
+	echo "revoked $name — reload the front for it to take effect"
+}
+
+cmd_crl() {
+	openssl ca -config "$CA_DIR/openssl.cnf" -batch -gencrl -out "$CA_DIR/ca.crl" 2>/dev/null ||
+		die "could not write the revocation list"
+	chmod 644 "$CA_DIR/ca.crl"
+}
+
+case "${1:-}" in
+	init)   shift; cmd_init "$@" ;;
+	issue)  shift; cmd_issue "$@" ;;
+	list)   shift; cmd_list "$@" ;;
+	revoke) shift; cmd_revoke "$@" ;;
+	crl)    shift; cmd_crl "$@" ;;
+	*) die "usage: roost-ca {init|issue <device>|list|revoke <device>|crl}" ;;
+esac

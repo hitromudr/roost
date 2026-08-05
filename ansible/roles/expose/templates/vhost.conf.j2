@@ -42,6 +42,17 @@ server {
     ssl_certificate     {{ expose_cert_root }}/{{ expose_resolved_host }}/fullchain.pem;
     ssl_certificate_key {{ expose_cert_root }}/{{ expose_resolved_host }}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
+{% if expose_client_auth == 'mtls' %}
+
+    # The other lock: a certificate on the device instead of a token in a URL.
+    # The token is a string that has been in a browser's history and in this
+    # front's logs; a certificate cannot be read back out of the phone it was
+    # installed on.
+    ssl_client_certificate {{ expose_ca_dir }}/ca.crt;
+    ssl_crl                {{ expose_ca_dir }}/ca.crl;
+    ssl_verify_client      optional;
+    ssl_verify_depth       2;
+{% endif %}
 
     # A terminal is a shell. Keep it out of search engines and out of other
     # people's frames.
@@ -51,8 +62,39 @@ server {
 
     # A screenshot pasted from the phone travels as a request body.
     client_max_body_size 25m;
+{% if expose_client_auth == 'mtls' %}
+
+    # Where a device that has no certificate yet collects one. `optional` above
+    # rather than `on` exists for exactly this path: the phone being enrolled is
+    # by definition the one that cannot authenticate.
+    #
+    # What stands in for a certificate here is a path nobody can guess, a file
+    # that needs a password to import, and ten minutes — roost-enroll publishes
+    # one random name into this directory and schedules its removal. Nothing
+    # else is served from it, and it is not the webroot.
+    location ^~ /roost-enroll/ {
+        alias {{ expose_enroll_dir }}/;
+        # A .p12 the browser is meant to hand to the system importer rather than
+        # display or run.
+        default_type application/x-pkcs12;
+        add_header Content-Disposition "attachment" always;
+        autoindex off;
+    }
+{% endif %}
 
     location / {
+{% if expose_client_auth == 'mtls' %}
+        # `if` in a location is usually a smell; for client verification it is
+        # the documented way, because there is no other place to ask.
+        #
+        # 403 and a sentence, not a bare refusal: the failure a person meets
+        # here is "I opened the link and it says forbidden", and the answer —
+        # the certificate was never imported, or it was revoked — is not
+        # something a browser can guess.
+        if ($ssl_client_verify != SUCCESS) {
+            return 403 "This terminal wants a client certificate. Run 'roost enroll <device>' on the server and open the link it prints.\n";
+        }
+{% endif %}
         proxy_pass http://{{ expose_upstream }};
 
         # $http_host, not $host, and this is the line to get wrong. The

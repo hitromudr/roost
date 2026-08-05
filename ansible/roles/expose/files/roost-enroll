@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# roost-enroll — hand one device its way in.
+#
+#   roost-enroll <device>     issue a certificate and publish it, once
+#
+# Prints two lines: the address to open on the phone, and the password its
+# importer will ask for.
+#
+#   url=https://…/roost-enroll/<random>.p12
+#   password=…
+#
+# Why a link and not a QR code with the certificate in it. Measured rather than
+# assumed: a device's bundle is about 4.4KB (5.8KB in base64), and a QR code
+# holds at most 2953 bytes — and a code that dense is not something a phone
+# reads off a screen anyway. So the code carries a link, the link carries the
+# file, and the password is short enough to type once.
+#
+# What makes the link safe enough to be the thing a camera sees:
+#
+#  - it is one random path, and nothing else is served from that directory;
+#  - it stops existing after ROOST_ENROLL_TTL (ten minutes by default), whether
+#    or not it was used;
+#  - the file inside it needs a password to import, which is on the screen and
+#    not in the link.
+#
+# That is the same order of exposure as the token this replaces, for a few
+# minutes rather than forever — and what comes out of it is a credential that
+# cannot be read back out of the phone.
+set -euo pipefail
+
+CA_BIN="${ROOST_CA_BIN:-/usr/local/sbin/roost-ca}"
+ENROLL_DIR="${ROOST_ENROLL_DIR:-/var/www/roost-enroll}"
+STATE="${ROOST_EXPOSE_STATE:-/etc/roost/expose.env}"
+TTL="${ROOST_ENROLL_TTL:-600}"
+
+die() { printf 'roost-enroll: %s\n' "$*" >&2; exit 1; }
+
+device="${1:-}"
+[ -n "$device" ] || die "which device? (a name, e.g. 'phone')"
+[ -x "$CA_BIN" ] || die "$CA_BIN is not there — is client_auth=mtls installed?"
+[ -d "$ENROLL_DIR" ] || die "$ENROLL_DIR is not there — run 'roost expose' first"
+
+base="$(sed -n 's/^EXPOSE_URL=//p' "$STATE" 2>/dev/null | tail -n1)"
+[ -n "$base" ] || die "no published address in $STATE — run 'roost expose' first"
+
+# Issued first: if the authority refuses (a name already used, a missing CA),
+# nothing has been published and there is nothing to clean up.
+issued="$("$CA_BIN" issue "$device")"
+file="$(printf '%s\n' "$issued" | sed -n 's/^file=//p')"
+password="$(printf '%s\n' "$issued" | sed -n 's/^password=//p')"
+[ -f "$file" ] || die "the authority reported no file for '$device'"
+
+# A path nobody can guess, and a name that says nothing about the device: the
+# directory is served without a client certificate, because a phone that has not
+# got one yet is exactly who is asking.
+slug="$(openssl rand -hex 16)"
+published="$ENROLL_DIR/$slug.p12"
+install -m 0644 "$file" "$published"
+
+# Removed by the machine rather than by whoever remembers to. A transient
+# systemd unit is the least surprising timer on a stand; where there is no
+# systemd, a detached shell does the same job for as long as the box stays up.
+if command -v systemd-run >/dev/null && [ -d /run/systemd/system ]; then
+	systemd-run --collect --quiet --on-active="$TTL" \
+		--unit="roost-enroll-$slug" /bin/rm -f "$published" >/dev/null 2>&1 ||
+		die "could not schedule the link's removal — refusing to publish one that stays"
+else
+	setsid nohup bash -c "sleep $TTL; rm -f '$published'" >/dev/null 2>&1 &
+fi
+
+printf 'url=%s/roost-enroll/%s.p12\n' "${base%/}" "$slug"
+printf 'password=%s\n' "$password"
+printf 'expires=%s seconds\n' "$TTL"

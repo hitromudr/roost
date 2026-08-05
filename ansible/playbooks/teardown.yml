@@ -65,6 +65,8 @@
         # miss. Measured on the target's own ansible; the one on this machine
         # (2.19) accepts both, which is exactly why it was not caught here.
         roost_expose_webroot_owned: "{{ 'EXPOSE_WEBROOT_OWNED=true' in roost_state_text }}"
+        roost_ca_dir: "{{ roost_state_text | regex_search('EXPOSE_CA_DIR=(\\S+)', '\\1') | default([''], true) | first }}"
+        roost_enroll_dir: "{{ roost_state_text | regex_search('EXPOSE_ENROLL_DIR=(\\S+)', '\\1') | default([''], true) | first }}"
 
     # pockterm's own installer removes the unit and the binary it wrote. Using
     # it rather than deleting files by hand keeps one owner for those files
@@ -110,6 +112,23 @@
         path: "{{ roost_terminal_src }}"
         state: absent
       when: roost_terminal_src | length > 0
+
+    # The authority goes with the rest of it. That is the decision it looks
+    # like: every device enrolled against it stops being able to get in, which
+    # is right — the terminal it let them into is being removed in the same
+    # breath. Keeping the key "in case" would leave the one file on the machine
+    # that can mint a way into a service that no longer exists.
+    - name: Remove the certificate authority roost created
+      ansible.builtin.file:
+        path: "{{ roost_ca_dir }}"
+        state: absent
+      when: roost_ca_dir | length > 0
+
+    - name: Remove the directory devices collected their bundles from
+      ansible.builtin.file:
+        path: "{{ roost_enroll_dir }}"
+        state: absent
+      when: roost_enroll_dir | length > 0
 
     - name: Remove the challenge directory roost created
       ansible.builtin.file:
@@ -172,6 +191,8 @@
         state: absent
       loop:
         - /usr/local/sbin/egress-firewall
+        - /usr/local/sbin/roost-ca
+        - /usr/local/sbin/roost-enroll
         - /usr/local/bin/agent-run
         - /usr/local/bin/agent-exec
         - /usr/local/bin/roost-session

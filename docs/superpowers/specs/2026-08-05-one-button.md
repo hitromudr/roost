@@ -88,8 +88,28 @@ first is not the end state:
   browser history and in the front's logs. Said in the output, not only in the
   README.
 - **mutual TLS** — a client certificate on the phone. Stronger and not
-  one-button: a `.p12` does not fit in a QR code. Second step, after the path
-  above works end to end.
+  one-button: a `.p12` does not fit in a QR code. Written on the same day, once
+  the token path was proven end to end, and it is `client_auth=mtls`:
+
+  - roost keeps an authority of its own (`roost-ca`, `/etc/roost/ca`, 0700), and
+    the key in it is the one file on the machine that can mint a way in;
+  - `roost enroll <device>` issues one bundle, publishes it at a random path,
+    schedules its removal, and prints a QR code with the link plus the password
+    the importer will ask for. The scheduling happens *before* the link is
+    printed: a machine that cannot schedule the removal does not publish the
+    link at all;
+  - a lost phone comes back out with `roost-ca revoke`, through the revocation
+    list nginx reads, and the other devices are untouched;
+  - the numbers behind "not in the code": the bundle is 4.4KB and a QR code holds
+    2953 bytes. `tests/ca.bats` asserts that gap, so a future change that makes
+    the bundle small enough is a failing test rather than a surprise.
+
+  What the shape cost in honesty: with `ssl_verify_client optional`, nginx
+  refuses a certificate it cannot verify with a 400 of its own, before any
+  location is chosen — so the vhost's helpful 403 is only ever seen by a device
+  with no certificate at all. `optional_no_ca` would move that decision into the
+  vhost and a better message with it, at the price of nginx no longer checking
+  the revocation list. The list is the point, so the message is what gives way.
 
 Nothing here is a reason to skip the sentence that has been in the README from
 the start: treat this access as SSH.

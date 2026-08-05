@@ -168,6 +168,14 @@
             mode: "0755"
           register: expose_webroot_created
 
+        # Before the vhost is written, because the vhost refers to the
+        # authority's certificate and its revocation list: nginx will not load a
+        # configuration naming files that are not there, and on a machine with
+        # other vhosts that failure would block their reloads too.
+        - name: Set up client certificates
+          ansible.builtin.include_tasks: mtls.yml
+          when: expose_client_auth == 'mtls'
+
         - name: Look for a certificate
           ansible.builtin.stat:
             path: "{{ expose_cert_root }}/{{ expose_resolved_host }}/fullchain.pem"

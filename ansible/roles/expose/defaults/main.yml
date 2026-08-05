@@ -41,6 +41,24 @@ expose_reload_allowed: false
 expose_email: ""
 expose_staging: false
 
+# The lock on the door.
+#
+# token  the shared token pockterm puts in the URL your phone saved. What makes
+#        the first run one command — and a string that lives in browser history
+#        and in this front's logs.
+# mtls   a certificate on the device. roost keeps an authority of its own, hands
+#        one device at a time its bundle through `roost enroll`, and can take a
+#        lost phone back out (`roost-ca revoke`). Not one-button: a .p12 is 4.4KB
+#        and a QR code holds 2953 bytes, so what the code carries is a one-time
+#        link to it and the password is typed once.
+expose_client_auth: token
+expose_ca_dir: /etc/roost/ca
+expose_enroll_dir: /var/www/roost-enroll
+# How long an enrolment link exists, used or not.
+expose_enroll_ttl: 600
+expose_ca_bin: /usr/local/sbin/roost-ca
+expose_enroll_bin: /usr/local/sbin/roost-enroll
+
 # roost's own files.
 expose_webroot: /var/www/roost-acme
 expose_vhost_file: /etc/nginx/conf.d/roost-terminal.conf

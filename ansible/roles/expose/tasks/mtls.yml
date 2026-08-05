@@ -1,0 +1,78 @@
+---
+# The authority, the two commands that use it, and the directory a device
+# collects its bundle from. Only reached when expose_client_auth is 'mtls'.
+#
+# Nothing here issues a certificate: enrolment is an act, not a state, and a
+# playbook that handed out a bundle on every run would leave one publishable file
+# per run on the machine. `roost enroll <device>` is what issues.
+- name: Install what the authority needs
+  ansible.builtin.package:
+    name: openssl
+    state: present
+
+- name: Install the authority and the enrolment command
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "0755"
+  loop:
+    - { src: roost-ca, dest: "{{ expose_ca_bin }}" }
+    - { src: roost-enroll, dest: "{{ expose_enroll_bin }}" }
+  loop_control:
+    label: "{{ item.dest }}"
+
+# 0700, and root's: the key in there is the one that can issue somebody else a
+# way in. The script sets these too — said here as well so a directory that
+# existed before this role does not keep whatever mode it had.
+- name: Create the authority's directory
+  ansible.builtin.file:
+    path: "{{ expose_ca_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Create the authority
+  ansible.builtin.command: "{{ expose_ca_bin }} init"
+  environment:
+    ROOST_CA_DIR: "{{ expose_ca_dir }}"
+  args:
+    creates: "{{ expose_ca_dir }}/ca.crt"
+
+# nginx reads both as its own user after dropping privileges, so they are the two
+# files in there that are not 0600. That is what they are for: a certificate and
+# a revocation list are public by nature — what is secret is the key beside them.
+- name: Keep the authority's public halves readable by the front
+  ansible.builtin.file:
+    path: "{{ expose_ca_dir }}/{{ item }}"
+    mode: "0644"
+  loop:
+    - ca.crt
+    - ca.crl
+  failed_when: false
+
+- name: Create the directory a device collects its bundle from
+  ansible.builtin.file:
+    path: "{{ expose_enroll_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Whatever a previous enrolment left, if its timer never fired — a reboot in the
+# ten minutes between publishing and removal, say. An install is a good moment to
+# notice that a bundle is still on offer.
+- name: Take down any bundle still on offer from before
+  ansible.builtin.find:
+    paths: "{{ expose_enroll_dir }}"
+    patterns: "*.p12"
+    age: 10m
+  register: expose_stale_bundles
+
+- name: Remove it
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ expose_stale_bundles.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"

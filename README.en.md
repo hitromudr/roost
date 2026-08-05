@@ -75,9 +75,38 @@ as an app.
 
 `roost qr` then prints the code: the address together with the token. The token
 lives in the URL your phone saves, which means it also lives in browser history
-and in the logs of whatever sits in front. For something you keep, put client
-certificates there instead (see `deploy/nginx-mtls.conf.example` in pockterm);
-a `.p12` does not fit in a QR code, so that part is not one button.
+and in the logs of whatever sits in front. For something you keep there is a
+second lock, below.
+
+### The other lock: a certificate on the device
+
+`client_auth=mtls` in `roost.conf`, and the door asks for a client certificate
+instead of a token. roost keeps an authority of its own and hands out one device
+at a time:
+
+```bash
+./roost enroll phone
+```
+
+That prints a QR code with a **one-time link** to the device's bundle, and the
+password its importer will ask for. The certificate itself cannot travel in the
+code, and that is measured rather than argued: the bundle is 4.4KB, a QR code
+holds 2953 bytes, and a code that dense is not something a phone reads off a
+screen. So the code carries a link, the link exists for ten minutes whether or
+not it is used, and the file behind it needs a password to import.
+
+A lost phone is taken back out:
+
+```bash
+sudo roost-ca revoke phone && sudo systemctl reload nginx
+```
+
+Revocation goes through the list nginx reads: the same certificate that let a
+device in a minute ago stops letting it in, and the other devices are untouched.
+That is checked by a container test (`make test-integration`) rather than
+promised — no certificate is refused, a certificate gets in, somebody else's is
+refused, the enrolment path stays open to the device that has none yet, and the
+enrolment directory does not list itself.
 
 The buttons in the session drawer start the agent **through the sandbox**:
 pockterm's Makefile declares `CLAUDE ?=` and `AGENT ?=`, `?=` yields to the

@@ -7,6 +7,7 @@
 #   roost agent     install the agent binary if it is not here yet
 #   roost terminal  put a web terminal on this machine (only if there is none)
 #   roost expose    serve that terminal over TLS, and say at what address
+#   roost enroll    let one device in, when the lock is client certificates
 #   roost qr        print the QR code your phone opens
 #   roost doctor    check that the sandbox is what it claims to be
 #   roost projects [--list]         check out the repositories in projects.conf
@@ -35,6 +36,10 @@ TERMINAL_ENV="${ROOST_TERMINAL_ENV:-/etc/pockterm/pockterm.env}"
 # test has to be able to ask what happens when it is not installed, on a
 # machine where it is.
 POCKTERM_BIN="${ROOST_POCKTERM_BIN:-pockterm}"
+# The authority and the enrolment command, installed by the expose role when the
+# lock is client certificates.
+CA_BIN="${ROOST_CA_BIN:-/usr/local/sbin/roost-ca}"
+ENROLL_BIN="${ROOST_ENROLL_BIN:-/usr/local/sbin/roost-enroll}"
 
 log()  { printf '\033[1;34m[roost]\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m  ✓\033[0m %s\n' "$*"; }
@@ -43,7 +48,7 @@ bad()  { printf '\033[1;31m  ✗\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[roost]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
-	sed -n '2,13p' "$ROOT/roost" | sed 's/^# \{0,1\}//'
+	sed -n '2,14p' "$ROOT/roost" | sed 's/^# \{0,1\}//'
 }
 
 # --- configuration ------------------------------------------------------
@@ -80,6 +85,15 @@ set_defaults() {
 	# Contact address for Let's Encrypt. Empty registers without one, which
 	# means no mail when a certificate is about to expire.
 	email=""
+	# What the door is locked with.
+	#
+	# token  the string pockterm puts in the URL your phone saves. One command,
+	#        and a credential that lives in browser history and in the front's
+	#        logs.
+	# mtls   a certificate on the device. Stronger, and not one button: a bundle
+	#        is 4.4KB against a QR code's 2953, so the code carries a one-time
+	#        link to it and the import password is typed once. `roost enroll`.
+	client_auth=token
 }
 
 load_conf() {
@@ -141,7 +155,7 @@ agents_json() {
 }
 
 cmd_setup() {
-	local profile agent proxy host
+	local profile agent proxy host lock
 	log "a few questions; answers go to $CONF and are not asked again"
 	read -rp "  egress profile [pinned/proxied/direct] (pinned): " profile
 	read -rp "  agent command, or blank to have roost install one: " agent
@@ -152,6 +166,7 @@ cmd_setup() {
 		read -rp "  proxy the agent goes out through (http://user:pass@host:port): " proxy
 	fi
 	read -rp "  domain that points at this machine, or blank for an sslip.io name: " host
+	read -rp "  lock on the terminal [token/mtls] (token): " lock
 	cat > "$CONF" <<EOF
 # Written by 'roost setup'. Edit freely; 'roost install' reads it.
 egress_profile=${profile:-pinned}
@@ -172,6 +187,9 @@ listen=127.0.0.1:8130
 public_host=${host:-}
 tls_port=8443
 email=
+# token — the string in the URL your phone saves; mtls — a certificate on the
+# device, handed over by 'roost enroll' and revocable when a phone is lost.
+client_auth=${lock:-token}
 EOF
 	ok "wrote $CONF"
 	log "next: roost up"
@@ -388,6 +406,7 @@ EOF
 
 	run_playbook stand.yml --tags expose \
 		-e "expose_front=$front" \
+		-e "expose_client_auth=$client_auth" \
 		-e "expose_upstream=$listen" \
 		-e "expose_tls_port=$tls_port" \
 		-e "expose_reload_allowed=true" \
@@ -397,6 +416,56 @@ EOF
 
 	local url; url="$(read_state EXPOSE_URL "$EXPOSE_STATE")"
 	[ -z "$url" ] || ok "the terminal is reachable at $url"
+	if [ "$client_auth" = mtls ] && [ -n "$url" ]; then
+		log "the door wants a client certificate — let a device in with:"
+		log "  roost enroll phone"
+	fi
+}
+
+# cmd_enroll hands one device its way in, when the lock is a certificate rather
+# than a token.
+#
+# Two things come out of it and both are needed: a QR code with a one-time link
+# to the device's bundle, and the password its importer will ask for. The bundle
+# itself cannot be in the code — it is 4.4KB against a QR's 2953-byte ceiling,
+# measured rather than assumed — so the code is a link, and the link stops
+# existing ten minutes later whether or not it was used.
+cmd_enroll() {
+	load_conf
+	local device="${1:-}"
+	[ -n "$device" ] || die "which device? e.g. roost enroll phone"
+	[ "$client_auth" = mtls ] ||
+		die "client_auth is '$client_auth' in $CONF — enrolment is for the mtls lock. Set it and re-run 'roost expose'."
+	local url
+	url="$(read_state EXPOSE_URL "$EXPOSE_STATE")"
+	[ -n "$url" ] || die "nothing published yet — run 'roost expose' first"
+	command -v "$ENROLL_BIN" >/dev/null || [ -x "$ENROLL_BIN" ] ||
+		die "$ENROLL_BIN is not there — run 'roost expose' with client_auth=mtls"
+
+	local out link password expires
+	out="$(sudo "$ENROLL_BIN" "$device")" || die "enrolment failed for '$device'"
+	link="$(printf '%s\n' "$out" | sed -n 's/^url=//p')"
+	password="$(printf '%s\n' "$out" | sed -n 's/^password=//p')"
+	expires="$(printf '%s\n' "$out" | sed -n 's/^expires=//p')"
+	[ -n "$link" ] || die "the enrolment command printed no link"
+
+	log "on $device: scan this, then open the file it downloads"
+	if command -v "$POCKTERM_BIN" >/dev/null; then
+		"$POCKTERM_BIN" qr "$link"
+	else
+		echo "  $link"
+	fi
+	echo
+	echo "  password for the import: $password"
+	echo "  the link stops working in ${expires:-a few minutes}, used or not"
+	echo
+	echo "  Android: the download opens the importer; name it anything, and pick"
+	echo "           \"VPN and apps\" when it asks what the certificate is for."
+	echo "  iOS:     Settings offers the profile, then Settings → General →"
+	echo "           About → Certificate Trust Settings to turn it on."
+	echo
+	echo "  After it is imported, open the terminal itself: roost qr"
+	echo "  If the phone is lost: sudo $CA_BIN revoke $device && sudo systemctl reload nginx"
 }
 
 # cmd_qr ends the install with something to point a camera at. The pieces come
@@ -448,7 +517,13 @@ cmd_up() {
 	cmd_expose ${assume_yes:+--yes}
 	cmd_doctor || warn "doctor found something — the lines above say what"
 	echo
-	cmd_qr
+	if [ "$client_auth" = mtls ]; then
+		# The terminal's own QR would only produce a 403 on a phone with no
+		# certificate yet, so the enrolment code is what this run ends with.
+		cmd_enroll "${ROOST_DEVICE:-phone}"
+	else
+		cmd_qr
+	fi
 }
 
 # --- projects -----------------------------------------------------------
@@ -738,21 +813,73 @@ cmd_doctor() {
 		fi
 	fi
 
-	local url; url="$(read_state EXPOSE_URL "$EXPOSE_STATE")"
+	local url lock; url="$(read_state EXPOSE_URL "$EXPOSE_STATE")"
+	lock="$(read_state EXPOSE_CLIENT_AUTH "$EXPOSE_STATE")"
 	if [ -n "$url" ] && command -v curl >/dev/null; then
 		# Checked from this machine, but through the public name and TLS: that
 		# exercises the certificate and the vhost, which is what a phone will
-		# meet. A 401 is the terminal asking for the token, i.e. working.
+		# meet.
 		local out_code
 		out_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url/" || true)"
-		case "$out_code" in
-			200 | 401 | 403)
-				ok "$url answers with a valid certificate (HTTP $out_code)" ;;
-			*)
-				bad "$url did not answer (HTTP ${out_code:-none})"
-				echo "      fix: nginx -t; systemctl status nginx; and check the name still resolves here"
-				failed=1 ;;
-		esac
+		if [ "$lock" = mtls ]; then
+			# Here the interesting answer is a refusal. This request carries no
+			# client certificate, so anything that lets it through means the lock
+			# is not on — which looks from the outside exactly like a working
+			# terminal, and is the failure worth a check of its own.
+			case "$out_code" in
+				400 | 403)
+					ok "$url refuses a request with no client certificate (HTTP $out_code)" ;;
+				200)
+					bad "$url answered 200 without a client certificate — the lock is not on"
+					echo "      fix: roost expose (with client_auth=mtls), then check"
+					echo "           ssl_verify_client in the vhost and reload nginx"
+					failed=1 ;;
+				*)
+					bad "$url did not answer (HTTP ${out_code:-none})"
+					echo "      fix: nginx -t; systemctl status nginx; and check the name still resolves here"
+					failed=1 ;;
+			esac
+		else
+			# A 401 is the terminal asking for the token, i.e. working.
+			case "$out_code" in
+				200 | 401 | 403)
+					ok "$url answers with a valid certificate (HTTP $out_code)" ;;
+				*)
+					bad "$url did not answer (HTTP ${out_code:-none})"
+					echo "      fix: nginx -t; systemctl status nginx; and check the name still resolves here"
+					failed=1 ;;
+			esac
+		fi
+	fi
+
+	# The authority behind that lock, and whether anything is still on offer.
+	if [ "$lock" = mtls ]; then
+		local ca_dir enroll_dir
+		ca_dir="$(read_state EXPOSE_CA_DIR "$EXPOSE_STATE")"
+		enroll_dir="$(read_state EXPOSE_ENROLL_DIR "$EXPOSE_STATE")"
+		if [ -n "$ca_dir" ] && [ -r "$ca_dir/ca.crt" ]; then
+			ok "the authority is at $ca_dir"
+		elif [ -n "$ca_dir" ]; then
+			# Readable only by root is the normal case for the directory; the
+			# certificate itself has to be readable by the front.
+			if sudo -n test -f "$ca_dir/ca.crt" 2>/dev/null; then
+				ok "the authority is at $ca_dir"
+			else
+				bad "no authority at $ca_dir — devices cannot be enrolled"
+				echo "      fix: roost expose"
+				failed=1
+			fi
+		fi
+		# A bundle left on offer is a way in sitting on a public path. Its removal
+		# is scheduled, so one still here means the timer never fired — a reboot
+		# in those ten minutes, say.
+		if [ -n "$enroll_dir" ] && [ -d "$enroll_dir" ]; then
+			local left; left="$(find "$enroll_dir" -maxdepth 1 -name '*.p12' 2>/dev/null | wc -l)"
+			if [ "$left" -gt 0 ]; then
+				warn "$left enrolment bundle(s) still published in $enroll_dir"
+				echo "      they are a way in until removed: sudo rm $enroll_dir/*.p12"
+			fi
+		fi
 	fi
 
 	if tmux list-sessions >/dev/null 2>&1; then
@@ -771,6 +898,7 @@ case "${1:-help}" in
 	agent)     shift; cmd_agent "$@" ;;
 	terminal)  shift; cmd_terminal "$@" ;;
 	expose)    shift; cmd_expose "$@" ;;
+	enroll)    shift; cmd_enroll "$@" ;;
 	qr)        shift; cmd_qr "$@" ;;
 	projects)  shift; cmd_projects "$@" ;;
 	uninstall) shift; cmd_uninstall "$@" ;;

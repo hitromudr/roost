@@ -72,3 +72,21 @@ tls_port=8443
 # Contact address for Let's Encrypt. Empty registers without one, which means
 # no mail when a certificate is about to expire.
 email=
+
+# --- the lock on the door ----------------------------------------------
+# token  the shared token pockterm puts in the URL your phone saves. What makes
+#        the first run one command — and a credential that lives in browser
+#        history and in the front's logs.
+# mtls   a certificate on the device. roost keeps an authority of its own and
+#        hands one device at a time its bundle:
+#
+#          roost enroll phone
+#
+#        which prints a QR code with a one-time link and the password its
+#        importer will ask for. The bundle itself cannot be in the code — it is
+#        4.4KB against a QR's 2953-byte ceiling — so the code is a link, and the
+#        link stops existing ten minutes later whether or not it was used.
+#
+#        A lost phone is taken back out:
+#          sudo roost-ca revoke phone && sudo systemctl reload nginx
+client_auth=token

@@ -547,3 +547,86 @@ STUB
     [[ "$output" == *"this machine's own address"* ]]
     [[ "$output" == *"changes nothing"* ]]
 }
+
+# --- the other lock ------------------------------------------------------
+
+@test "enrolment is refused when the lock is a token" {
+    write_conf
+    export ROOST_EXPOSE_STATE="$BATS_TEST_TMPDIR/expose.env"
+    printf 'EXPOSE_URL=https://x:8443\n' > "$ROOST_EXPOSE_STATE"
+    run "$ROOST" enroll phone
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"client_auth"* ]]
+    [[ "$output" == *"mtls"* ]]
+}
+
+@test "enrolment without a device name asks for one" {
+    write_conf
+    printf 'client_auth=mtls\n' >> "$ROOST_CONF"
+    run "$ROOST" enroll
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"which device"* ]]
+}
+
+@test "enrolment before anything is published names the step that publishes" {
+    write_conf
+    printf 'client_auth=mtls\n' >> "$ROOST_CONF"
+    export ROOST_EXPOSE_STATE="$BATS_TEST_TMPDIR/absent.env"
+    run "$ROOST" enroll phone
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"roost expose"* ]]
+}
+
+@test "the lock reaches ansible, so the vhost knows which one to write" {
+    write_conf
+    printf 'client_auth=mtls\n' >> "$ROOST_CONF"
+    run "$ROOST" expose --yes
+    [ "$status" -eq 0 ]
+    grep -q "expose_client_auth=mtls" "$STUB_LOG"
+}
+
+# The check that matters here is inverted: with a certificate lock, a request
+# that carries none and is *let through* is the failure.
+@test "doctor calls out a certificate lock that lets an anonymous request in" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=/usr/bin/true
+CONF
+    export ROOST_EXPOSE_STATE="$BATS_TEST_TMPDIR/expose.env"
+    printf 'EXPOSE_URL=https://x:8443\nEXPOSE_CLIENT_AUTH=mtls\n' > "$ROOST_EXPOSE_STATE"
+    # curl says 200: the lock is not on.
+    printf '#!/usr/bin/env bash\nprintf 200\n' > "$STUB_DIR/curl"
+    chmod +x "$STUB_DIR/curl"
+    run "$ROOST" doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"the lock is not on"* ]]
+}
+
+@test "doctor is satisfied when the certificate lock refuses an anonymous request" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=/usr/bin/true
+CONF
+    export ROOST_EXPOSE_STATE="$BATS_TEST_TMPDIR/expose.env"
+    printf 'EXPOSE_URL=https://x:8443\nEXPOSE_CLIENT_AUTH=mtls\n' > "$ROOST_EXPOSE_STATE"
+    printf '#!/usr/bin/env bash\nprintf 403\n' > "$STUB_DIR/curl"
+    chmod +x "$STUB_DIR/curl"
+    run "$ROOST" doctor
+    [[ "$output" == *"refuses a request with no client certificate"* ]]
+}
+
+@test "doctor warns about a bundle still on offer" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=/usr/bin/true
+CONF
+    export ROOST_EXPOSE_STATE="$BATS_TEST_TMPDIR/expose.env"
+    mkdir -p "$BATS_TEST_TMPDIR/enroll"
+    touch "$BATS_TEST_TMPDIR/enroll/deadbeef.p12"
+    printf 'EXPOSE_URL=https://x:8443\nEXPOSE_CLIENT_AUTH=mtls\nEXPOSE_ENROLL_DIR=%s\n' \
+        "$BATS_TEST_TMPDIR/enroll" > "$ROOST_EXPOSE_STATE"
+    printf '#!/usr/bin/env bash\nprintf 403\n' > "$STUB_DIR/curl"
+    chmod +x "$STUB_DIR/curl"
+    run "$ROOST" doctor
+    [[ "$output" == *"still published"* ]]
+}

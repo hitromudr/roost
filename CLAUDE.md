@@ -104,6 +104,18 @@ Ansible roles:
   there is no domain. `proxy_set_header Host $http_host`, not `$host`: the
   terminal refuses a WebSocket upgrade whose Origin and Host disagree, and on a
   non-443 port only `$http_host` keeps the port.
+
+  Two locks, `expose_client_auth`. `token` is pockterm's own — one command, and a
+  credential that lives in browser history. `mtls` installs `roost-ca` (an
+  authority in `/etc/roost/ca`, 0700) and `roost-enroll`, and the vhost then asks
+  for a client certificate. Three things about that shape are decisions rather
+  than details: `ssl_verify_client optional` and not `on`, because the device
+  being enrolled is by definition the one that cannot authenticate and the
+  enrolment path has to stay open to it; not `optional_no_ca` either, because
+  that stops nginx checking the revocation list, which is the whole mechanism;
+  and the bundle travels as a one-time link rather than inside the QR code,
+  because it is 4.4KB against a code's 2953-byte ceiling — measured, and
+  `tests/ca.bats` fails if that ever stops being true.
 - `agent_sessions` (stand) — tmux sessions per project, named `roost-<project>`.
 - `projects` (any machine) — brings the machine it runs on up to the
   repository list in `projects.conf`. The list says what should be checked
@@ -124,13 +136,26 @@ ships.
 throwaway directories — no docker, no root, skipped where ansible is absent
 (CI installs ansible-lint, not ansible).
 
-`make test-integration` proves the egress policy in a throwaway container
-(`tests/integration/egress_container.sh`): direct egress rejected for the group,
-the local proxy still reachable, processes outside the group unaffected,
-re-applying changes nothing, and no rules left in either address family after
-`clear`. It needs docker — which the RPi5 has, and which works from inside the
-agent sandbox, so **run it there rather than assuming it cannot be run**. It was
-first run on 2026-08-05 and passed all eight checks.
+`make test-integration` runs two container suites. `egress_container.sh` proves
+the egress policy: direct egress rejected for the group, the local proxy still
+reachable, processes outside the group unaffected, re-applying changes nothing,
+and no rules left in either address family after `clear`. `mtls_container.sh`
+proves the client-certificate lock, against the role's own template rendered by
+ansible and an authority created by `roost-ca`: no certificate is refused, one
+this authority signed gets in, somebody else's does not, the enrolment path stays
+open to a device with none, the enrolment directory does not list itself, and a
+revoked certificate stops working while the others keep working.
+
+Both need docker — which the RPi5 has, and which works from inside the agent
+sandbox, so **run them there rather than assuming they cannot be run**. First run
+on 2026-08-05: eight checks and eleven.
+
+Two things the second suite taught, both about status codes rather than about the
+lock. nginx answers a certificate it cannot verify with **400** of its own,
+before any location is chosen, so only "no certificate at all" reaches the
+vhost's 403 — and a revoked certificate is refused the same way. A test that only
+asserted "refused" would have passed with the revocation list doing nothing,
+which is why that one asks the same device before and after revoking it.
 
 What no script can answer is which address the agent's traffic leaves from —
 `roost doctor` asks that now, and it is the check to look at first on a machine
