@@ -16,3 +16,14 @@ jobs:
           pipx install ansible-lint
       - run: make lint
       - run: make test
+
+  integration:
+    # The container test proves what the bats suite cannot: that the rules the
+    # role generates actually reject direct egress for the group and leave
+    # nothing behind. It needs docker and NET_ADMIN, which a runner has — and
+    # it had never been run anywhere until 2026-08-05, because the note next to
+    # it said "needs docker" and everyone read that as "not here".
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make test-integration

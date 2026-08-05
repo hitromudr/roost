@@ -51,7 +51,17 @@ The `pinned` and `proxied` profiles need `PROXY_URL` in
 `/etc/roost/agent-proxy.env` (0640, owned by the agent's account). Without it
 the agent has **no network at all**, and `doctor` says so in as many words.
 `roost setup` asks for the proxy up front, so that file is not left as
-homework.
+homework — or write the answers yourself: `roost.conf.example` sits next to it
+and explains every line.
+
+> **Check the exit address before you log an agent in.** A proxy that answers
+> is not the same as a proxy that changes where you come from: a local 3proxy
+> on the same server sends the traffic out of that server's own address. To a
+> provider, a request from an address it does not expect is grounds for
+> suspending the account, and that costs more than an afternoon of debugging.
+> `roost doctor` prints the address it actually found and compares it with
+> `expected_exit` from `roost.conf`; while that is empty it says there was
+> nothing to compare against.
 
 ## From a phone
 
@@ -59,7 +69,7 @@ homework.
 vhost file in nginx, a Let's Encrypt certificate, and a port nobody holds
 (`8443` by default — on a machine that does anything, `443` almost always
 belongs to something). You may have no domain at all: then the name is derived
-from the machine's address through `sslip.io` (`5-181-21-235.sslip.io`), and
+from the machine's address through `sslip.io` (`203-0-113-5.sslip.io`), and
 the certificate is still a real one — which is what lets the page be installed
 as an app.
 

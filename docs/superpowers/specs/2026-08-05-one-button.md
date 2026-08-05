@@ -26,13 +26,12 @@ agent already sandboxed behind it.
 
 ## What "one button" has to include
 
-Measured on two real machines before writing any of this — a busy production
-host (ROY) and an almost-empty exit node (FINKA), both of which someone else's
-services already occupy:
+Measured on two real machines before writing any of this — a busy production host
+and an almost-empty VPS, both of which someone else's services already occupy:
 
 | Piece | Why it is missing today |
 |---|---|
-| ansible itself | FINKA has none; Debian 12 ships core 2.14, and the roles call `systemd_service` (core 2.16+). `./roost install` dies on its first line. |
+| ansible itself | neither has any; Debian 12 ships core 2.14, and the roles call `systemd_service` (core 2.16+). `./roost install` dies on its first line. |
 | the agent | no `claude` on either machine, and no node. A sandbox around a binary that is not there is a session that closes the instant it opens. |
 | the terminal | pockterm installs itself, but nothing brings it, points it at the sandbox, or tells it which Makefile starts a session. |
 | the way in | `:80` and `:443` belong to somebody else on both machines. No cert, no vhost, no QR — and no honest way to add one without touching a service roost did not install. |
@@ -48,7 +47,7 @@ services already occupy:
    reloading. `nginx -t` runs first: a bad file must not take the neighbours'
    vhosts down with it.
 3. **What roost cannot own, it prints.** Caddy configured over its admin API
-   (ROY) is not a file roost can add to. There it prints the route to add and
+   is not a file roost can add to. There it prints the route to add and
    stops — a snippet the owner applies beats a second owner of :443.
 4. **Every added piece is removable by name.** `roost uninstall` reads the
    state files and removes what they list, and nothing else.
@@ -74,7 +73,7 @@ services already occupy:
 6. **way in** (`expose`, new) — a TLS front for the terminal on this machine:
    roost's own nginx vhost on a port nobody holds, a Let's Encrypt certificate
    over the `:80` that is already there, and a hostname derived from the
-   machine's address when there is no domain (`5-181-21-235.sslip.io`).
+   machine's address when there is no domain (`203-0-113-5.sslip.io`).
    Guarded by rules 2 and 3.
 7. **qr** — `pockterm qr` with the public URL and the token, so the last line
    of the install is something to point a camera at.
@@ -110,8 +109,9 @@ the start: treat this access as SSH.
 
 ## How it is verified
 
-On FINKA, from nothing: the tree, a `roost.conf`, `./roost up --yes`. Debian 12,
-two cores, no ansible, no Go, no node, no tmux, no agent — and `:80` and `:443`
+On the emptier of the two, from nothing: the tree, a `roost.conf`, `./roost up
+--yes`. Debian 12, two cores, no ansible, no Go, no node, no tmux, no agent —
+and `:80` and `:443`
 already held by nginx and an xray endpoint that are not roost's.
 
 What the run did, measured on 2026-08-05: installed ansible-core 2.14 from the
@@ -119,7 +119,7 @@ distribution, installed Claude Code through the proxy, created the group and
 three `gid-owner` rules, downloaded a checksummed Go toolchain into
 `/opt/roost/go`, cloned pockterm from GitHub and built it, put it on
 `127.0.0.1:8130`, added `/etc/nginx/conf.d/roost-terminal.conf`, obtained a
-Let's Encrypt certificate for `5-181-21-235.sslip.io` over the `:80` that was
+Let's Encrypt certificate for that sslip.io name over the `:80` that was
 already there, and printed a QR code. `EXIT=0`.
 
 Then, from another machine over the internet rather than from the host itself:
@@ -191,4 +191,15 @@ Three more defects, all found by that cycle:
    check` nor `ansible-lint` had anything to say; the target's own version found
    it in seconds. It would have broken a real teardown, not only `--check`.
 
-Still to verify: a phone that has never seen the machine.
+What is deliberately not verified any further: nothing else is run as an
+authenticated agent for the sake of a test. The chain from a phone's button to a
+process in the sandbox group was proved once, on a machine where no agent had
+ever logged in — the first run's own state file shows no credentials, so no
+request carried an account — and the stand was then removed. A verification that
+risks the account it is meant to protect is not a verification anyone should
+repeat, and this project is about to be handed to people who would repeat it.
+
+That is also why `roost doctor` now prints the exit address whether or not there
+is anything to compare it against: on the machine used for these runs the local
+proxy came out of the machine's own address, which the profile's promise of a
+fixed exit says nothing about and which nothing in the project had ever asked.

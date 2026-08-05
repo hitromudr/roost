@@ -125,7 +125,7 @@
 # does not exist yet and a proxy *was* supplied, only the task above creates it.
 # Standing before that task, this one failed with "file is absent, cannot
 # continue" on the first stand installed from a config file rather than by hand
-# (FINKA, 2026-08-05). The old order worked only where the file already existed.
+# (2026-08-05). The old order worked only where the file already existed.
 #
 # Owned by the agent's account rather than by root: group membership is fixed
 # when a process starts, so a tmux server running since before this role first

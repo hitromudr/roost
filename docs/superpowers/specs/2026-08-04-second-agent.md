@@ -38,7 +38,7 @@ policy on `gid-owner`, never on the binary, and the agent is one variable,
 ## What was measured, not assumed
 
 Checked on the stand on 2026-08-04, from inside the sandbox group
-(`gid=agent-sandbox`, `pinned` profile, proxy EMMET on `127.0.0.1:8129`):
+(`gid=agent-sandbox`, `pinned` profile, the machine's own proxy on `127.0.0.1:8129`):
 
 | Check | Result |
 |---|---|
@@ -47,7 +47,7 @@ Checked on the stand on 2026-08-04, from inside the sandbox group
 | node on the stand | v20.19.2 — sufficient |
 | `https://api.openai.com/v1/models` | 401 — reachable through the proxy |
 | `https://chatgpt.com/backend-api/codex/responses` | 405 on GET — reachable |
-| `https://auth.openai.com/.well-known/openid-configuration` | 200 via EMMET and via POLKA |
+| `https://auth.openai.com/.well-known/openid-configuration` | 200 through either proxy on the machine |
 | `https://chatgpt.com/` (HTML) | 403 from both exits — Cloudflare on datacenter IPs |
 | landlock in the kernel | **absent**: `/sys/kernel/security/lsm` = `capability` |
 
@@ -196,7 +196,7 @@ the list is not rebuilt later; each belongs in its own repository's history.
    `exante/CLAUDE.md` is about: no corporate secrets, no corporate checkouts and
    no run artefacts on this machine.
 3. **Sticky exit — settled 2026-08-05: the same exit, risk accepted.** Both
-   agents leave through EMMET. A separate exit for OpenAI would mean a second
+   agents leave through the same proxy. A separate exit for OpenAI would mean a second
    sandbox group and a second rule set to keep in step, and the invariant that
    matters — one account, one address — is not broken by sharing one. Revisit if
    OpenAI asks for phone verification again or Anthropic objects to the address;

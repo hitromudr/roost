@@ -8,8 +8,8 @@
 # failed with "file (/etc/roost/agent-proxy.env) is absent, cannot continue",
 # and the install stopped with the sandbox half configured. The old order worked
 # only on a machine where somebody had already created that file by hand, which
-# was every machine roost had been installed on until then (found on FINKA,
-# 2026-08-05).
+# was every machine roost had been installed on until then (found on a fresh
+# VPS, 2026-08-05).
 #
 # This checks the order and nothing else. Running those two tasks for real needs
 # root, a group and a firewall: that is what `make test-integration` does in a

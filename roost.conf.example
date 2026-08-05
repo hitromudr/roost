@@ -1,0 +1,74 @@
+# roost.conf — answers about this machine and this person.
+#
+# `roost setup` writes this file from a few questions; `roost up` and
+# `roost install` read it. It is gitignored, and this example is what travels:
+# copy it, edit it, or just run the wizard.
+#
+#   cp roost.conf.example roost.conf   # then edit
+#   ./roost up
+
+# --- the sandbox --------------------------------------------------------
+# pinned   loopback only. The agent reaches the internet through a local proxy
+#          that is itself outside the sandbox, so its exit address stays the
+#          same wherever the machine is.
+# proxied  the same, plus destinations you name in the role's _allow list.
+# direct   no restrictions. Here so that "unrestricted" is a choice somebody
+#          made rather than the result of skipping configuration.
+egress_profile=pinned
+
+# The proxy the sandbox goes out through. Written to
+# /etc/roost/agent-proxy.env (0640, owned by the agent's account) by
+# `roost install`; leave it empty and whatever is already in that file is kept.
+#
+# On the pinned and proxied profiles an agent with no proxy has no network at
+# all — it fails on its first request, and `roost doctor` says so.
+proxy_url=http://user:password@127.0.0.1:8129
+
+# The address the agent's traffic is expected to leave from. Read this twice
+# before releasing an agent that is logged in: a request from an address the
+# provider does not expect is how accounts get suspended, and a local proxy
+# that answers is not the same thing as a proxy that changes where you come
+# from. `roost doctor` prints the real answer and compares it with this.
+#
+# Empty means unchecked — doctor then reports the address it found and says
+# nothing was compared.
+expected_exit=
+
+# Where doctor asks. Any service that answers with the caller's address.
+exit_probe=https://ifconfig.me
+
+# --- the agent ----------------------------------------------------------
+# The binary a session starts. Leave it empty to have roost install Claude
+# Code (`roost agent`) and record the path it chose back into this file.
+agent_command=
+
+# Further agents, name:command, comma-separated. Each gets a launcher of its
+# own — `codex` below installs /usr/local/bin/codex-safe — sharing the group,
+# the proxy and the profile with the agent above. One policy for all of them.
+#   agents=codex:/home/you/.local/bin/codex
+agents=
+
+# Where projects live. Sessions are named after directories here.
+project_dir=/home/you/work
+
+# --- the terminal, and the way in --------------------------------------
+# A web terminal is installed only where there is none: a pockterm.service
+# this machine already has keeps its owner, and roost says so and stops.
+# false skips it entirely — sessions are plain tmux, so ssh -t or mosh work.
+terminal=true
+listen=127.0.0.1:8130
+
+# The name your phone will open. Empty derives one from this machine's address
+# through sslip.io (203-0-113-5.sslip.io for 203.0.113.5), which still gets a
+# real certificate — so the page can be installed as an app without a domain
+# of your own.
+public_host=
+
+# The port TLS is served on. Not 443: on a machine that does anything, 443
+# usually already belongs to something, and taking it would make roost the
+# second owner of somebody else's front door.
+tls_port=8443
+
+# Contact address for Let's Encrypt. Empty registers without one, which means
+# no mail when a certificate is about to expire.
+email=
