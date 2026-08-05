@@ -29,6 +29,13 @@ EOF
     export AGENT_COMMAND=/usr/bin/true
     # Never read the real machine's configuration during a test.
     export AGENT_CONFIG="$BATS_TEST_TMPDIR/absent.env"
+    # Nor the rest of what a stand puts in the environment. agent-run exports
+    # every AGENT_* variable it reads, so a suite run from inside a roost
+    # session inherits them — and the environment outranks the config file by
+    # design. Without this, the tests that prove the file is read pass in CI
+    # and fail on the machine the roles manage, which is the one place the
+    # answer matters.
+    unset AGENT_PROFILE AGENT_DIR AGENT_DEBUG_ENV
 
     # The normal state of a stand: a proxy is configured. Tests about its
     # absence remove or rewrite this file themselves.
