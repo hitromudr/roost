@@ -1,0 +1,123 @@
+---
+- name: Look for an agent already on the machine
+  ansible.builtin.stat:
+    path: "{{ agent_cli_command }}"
+  register: agent_cli_present
+
+# An agent that is already there is left exactly as it is. Re-running the
+# installer would be a second owner of the same binary, and the operator's own
+# npm-installed or distribution-packaged agent is not roost's to replace.
+- name: Say the agent is already installed
+  ansible.builtin.debug:
+    msg: "{{ agent_cli_command }} is already installed — leaving it alone"
+  when: agent_cli_present.stat.exists
+
+- name: Refuse to continue without an agent
+  ansible.builtin.assert:
+    that: agent_cli_present.stat.exists
+    fail_msg: >-
+      No agent at {{ agent_cli_command }} and agent_cli_install is false.
+      Install one, or set agent_cli_command to the binary you already have —
+      a sandbox around a command that does not exist gives a session that
+      closes the moment it opens.
+    quiet: true
+  when: not (agent_cli_install | bool)
+
+- name: Install the agent
+  when:
+    - agent_cli_install | bool
+    - not agent_cli_present.stat.exists
+    - not ansible_check_mode
+  block:
+    # curl is what the installer uses to fetch its own pieces; without it the
+    # script fails halfway and leaves nothing behind to say why.
+    - name: Install what the installer needs
+      ansible.builtin.package:
+        name: curl
+        state: present
+
+    - name: Fetch the official installer
+      ansible.builtin.get_url:
+        url: "{{ agent_cli_installer_url }}"
+        dest: /tmp/roost-agent-install.sh
+        mode: "0755"
+      environment: "{{ agent_cli_download_env }}"
+
+    # Run as the agent's own account: the installer writes into that account's
+    # ~/.local, and a copy under /root would not be the agent any session
+    # starts.
+    - name: Run the installer as the agent's account
+      ansible.builtin.command: /bin/bash /tmp/roost-agent-install.sh
+      args:
+        creates: "{{ agent_cli_command }}"
+      become: true
+      become_user: "{{ agent_cli_user }}"
+      environment: "{{ agent_cli_download_env }}"
+
+    - name: Remove the installer
+      ansible.builtin.file:
+        path: /tmp/roost-agent-install.sh
+        state: absent
+
+    - name: Confirm the agent is now there
+      ansible.builtin.stat:
+        path: "{{ agent_cli_command }}"
+      register: agent_cli_after
+
+    - name: Fail when the installer left no binary
+      ansible.builtin.assert:
+        that: agent_cli_after.stat.exists
+        fail_msg: >-
+          The installer finished but {{ agent_cli_command }} is not there.
+          Run it by hand to see what it says:
+          curl -fsSL {{ agent_cli_installer_url }} | bash
+        quiet: true
+
+    - name: Note that this run installed the agent
+      ansible.builtin.set_fact:
+        agent_cli_installed_now: true
+
+# Asked rather than assumed: a binary that exists and a binary that runs are
+# different claims, and the difference here is an agent that dies on its first
+# session. Failure is not fatal — an agent that cannot answer `--version` may
+# still be one the operator wants recorded — but it is said out loud.
+- name: Ask the agent for its version
+  ansible.builtin.command: "{{ agent_cli_command }} --version"
+  register: agent_cli_version_out
+  changed_when: false
+  failed_when: false
+  become: true
+  become_user: "{{ agent_cli_user }}"
+  when: not ansible_check_mode
+
+- name: Say the agent does not run here
+  ansible.builtin.debug:
+    msg: >-
+      {{ agent_cli_command }} is installed but `--version` failed
+      ({{ agent_cli_version_out.stderr | default('') | trim }}). Sessions
+      started for it will close immediately — check the binary before relying
+      on the stand.
+  when:
+    - not ansible_check_mode
+    - agent_cli_version_out.rc | default(1) != 0
+
+# Created here as well as in egress_sandbox, because this role runs first: an
+# agent has to exist before there is a point in sandboxing one. Two roles
+# declaring the same directory the same way is idempotent; the ordering is not
+# negotiable, and the alternative was a run that installed the agent and then
+# failed on a missing directory — measured on the first real machine.
+- name: Create the roost configuration directory
+  ansible.builtin.file:
+    path: "{{ agent_cli_state_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Record what the agent is
+  ansible.builtin.template:
+    src: agent.env.j2
+    dest: "{{ agent_cli_state_file }}"
+    mode: "0644"
+  vars:
+    agent_cli_resolved_command: "{{ agent_cli_command }}"
+    agent_cli_version: >-
+      {{ (agent_cli_version_out.stdout | default('unknown')) | trim | default('unknown', true) }}

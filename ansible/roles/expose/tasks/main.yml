@@ -1,0 +1,211 @@
+---
+- name: Say that nothing is being published
+  ansible.builtin.debug:
+    msg: >-
+      expose_front is 'off' — the terminal stays on {{ expose_upstream }} and
+      is reachable only from this machine. Anything that speaks tmux can still
+      front the sessions.
+  when: expose_front == 'off'
+
+- name: Publish the terminal
+  when: expose_front != 'off'
+  block:
+    # --- the name, and whether it points here ------------------------------
+    - name: Work out the name the phone will open
+      ansible.builtin.set_fact:
+        expose_resolved_host: >-
+          {{ expose_host if expose_host | length > 0
+             else (expose_address | replace('.', '-')) + '.' + expose_sslip_suffix }}
+
+    - name: Refuse to invent a name without an address
+      ansible.builtin.assert:
+        that: (expose_host | length > 0) or (expose_address | length > 0)
+        fail_msg: >-
+          No expose_host and no address to derive one from. Give the domain
+          that points at this machine (expose_host), or its public address
+          (expose_address) — a certificate can only be issued for a name that
+          resolves here.
+        quiet: true
+
+    - name: Ask DNS where that name points
+      ansible.builtin.command: getent hosts {{ expose_resolved_host }}
+      register: expose_dns
+      changed_when: false
+      failed_when: false
+
+    # Checked before anything is written: a name that does not resolve here
+    # fails the ACME challenge several steps later, with an error about a
+    # challenge rather than about DNS. And a name that resolves somewhere else
+    # is worse — the certificate might even be issued, for somebody else's
+    # machine.
+    - name: Check the name resolves to this machine
+      ansible.builtin.assert:
+        that:
+          - expose_dns.rc == 0
+          - expose_address | length == 0 or expose_address in expose_dns.stdout
+        fail_msg: >-
+          {{ expose_resolved_host }}
+          {{ 'does not resolve' if expose_dns.rc != 0
+             else 'resolves to ' + (expose_dns.stdout.split() | first | default('?')) }},
+          but this machine is {{ expose_address | default('unknown', true) }}.
+          Point the name here first, or pass the address this machine is
+          reached at (expose_address) so the derived sslip.io name matches.
+        quiet: true
+
+    # --- who owns the front door ------------------------------------------
+    - name: Look for nginx
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: expose_nginx_bin
+      loop:
+        - /usr/sbin/nginx
+        - /usr/bin/nginx
+
+    - name: Look for roost's own record of installing it
+      ansible.builtin.slurp:
+        src: "{{ expose_state_file }}"
+      register: expose_state_raw
+      failed_when: false
+
+    - name: See what is listening on port 80
+      ansible.builtin.command: ss -Htln
+      register: expose_listen
+      changed_when: false
+
+    - name: Decide how the terminal gets published
+      ansible.builtin.set_fact:
+        expose_nginx_present: "{{ expose_nginx_bin.results | map(attribute='stat.exists') | select | list | length > 0 }}"
+        expose_port80_taken: >-
+          {{ expose_listen.stdout_lines
+             | select('search', ':80\\s')
+             | list | length > 0 }}
+        expose_nginx_owned: >-
+          {{ 'EXPOSE_NGINX_OWNED=true' in
+             ((expose_state_raw.content | default('') | b64decode) if expose_state_raw.content is defined else '') }}
+
+    - name: Work out the mode
+      ansible.builtin.set_fact:
+        # nginx here, or a free port 80 to install it on, and otherwise there is
+        # a front door with an owner: print what to add to it rather than
+        # fighting for the port.
+        expose_mode: >-
+          {{ 'nginx' if (expose_nginx_present | bool or not (expose_port80_taken | bool))
+                        and expose_front in ['auto', 'nginx']
+             else ('nginx' if expose_front == 'nginx' else 'print') }}
+
+    - name: Say what has to be added by hand
+      ansible.builtin.debug:
+        msg:
+          - "Port 80 is taken and nginx is not here, so roost has no file to add."
+          - "Add this to whatever holds the front door, then run: roost qr"
+          - "  {{ expose_resolved_host }} -> http://{{ expose_upstream }}"
+          - "  WebSocket upgrade must pass through, and the Host header must
+             keep its port — the terminal refuses an upgrade whose Origin and
+             Host disagree."
+      when: expose_mode == 'print'
+
+    # --- roost's own vhost, on somebody else's nginx -----------------------
+    - name: Put the terminal behind nginx
+      when: expose_mode == 'nginx'
+      block:
+        - name: Refuse to reload an nginx roost did not install
+          ansible.builtin.assert:
+            that: (expose_nginx_owned | bool) or (expose_reload_allowed | bool)
+            fail_msg: >-
+              nginx on this machine was not installed by roost, and publishing
+              the terminal means adding {{ expose_vhost_file }} and reloading
+              it. That reload belongs to whoever put nginx here. Re-run with
+              -e expose_reload_allowed=true (which is what `roost expose`
+              asks about) once you are content for roost to add one file and
+              reload.
+            quiet: true
+          when: expose_nginx_present | bool
+
+        - name: Install nginx
+          ansible.builtin.package:
+            name: nginx
+            state: present
+          when: not (expose_nginx_present | bool)
+          register: expose_nginx_installed
+
+        - name: Install certbot
+          ansible.builtin.package:
+            name: certbot
+            state: present
+
+        - name: Check nginx reads the directory roost writes into
+          ansible.builtin.command: grep -qs 'conf\.d/\*\.conf' /etc/nginx/nginx.conf
+          register: expose_confd_included
+          changed_when: false
+          failed_when: false
+
+        - name: Say when conf.d is not included
+          ansible.builtin.assert:
+            that: expose_confd_included.rc == 0
+            fail_msg: >-
+              /etc/nginx/nginx.conf does not include conf.d/*.conf, so a file
+              roost writes there would be read by nobody and the terminal would
+              look published without being reachable. Add the include, or
+              publish it through the front door you already have (expose_front=print).
+            quiet: true
+
+        - name: Create the challenge directory
+          ansible.builtin.file:
+            path: "{{ expose_webroot }}"
+            state: directory
+            mode: "0755"
+
+        - name: Look for a certificate
+          ansible.builtin.stat:
+            path: "{{ expose_cert_root }}/{{ expose_resolved_host }}/fullchain.pem"
+          register: expose_cert_before
+
+        # First pass: the plain-HTTP server only. It is what answers the ACME
+        # challenge, and it is all that can be written before a certificate
+        # exists.
+        - name: Write the vhost
+          ansible.builtin.include_tasks: vhost.yml
+          vars:
+            expose_cert_present: "{{ expose_cert_before.stat.exists }}"
+
+        - name: Obtain the certificate
+          ansible.builtin.command:
+            argv: >-
+              {{ ['certbot', 'certonly', '--webroot', '-w', expose_webroot,
+                  '-d', expose_resolved_host, '--non-interactive', '--agree-tos',
+                  '--deploy-hook', 'systemctl reload nginx']
+                 + (['--staging'] if expose_staging | bool else [])
+                 + (['-m', expose_email] if expose_email | length > 0
+                    else ['--register-unsafely-without-email']) }}
+          args:
+            creates: "{{ expose_cert_root }}/{{ expose_resolved_host }}/fullchain.pem"
+          when: not ansible_check_mode
+
+        - name: Look for the certificate again
+          ansible.builtin.stat:
+            path: "{{ expose_cert_root }}/{{ expose_resolved_host }}/fullchain.pem"
+          register: expose_cert_after
+
+        # Second pass: now with TLS. Split in two because a vhost naming a
+        # certificate that is not there fails `nginx -t`, and on a machine with
+        # other vhosts that failure blocks their reloads too.
+        - name: Write the vhost with TLS
+          ansible.builtin.include_tasks: vhost.yml
+          vars:
+            expose_cert_present: "{{ expose_cert_after.stat.exists }}"
+          when: expose_cert_after.stat.exists
+
+        - name: Record what roost published
+          ansible.builtin.template:
+            src: expose.env.j2
+            dest: "{{ expose_state_file }}"
+            mode: "0644"
+          vars:
+            expose_cert_present: "{{ expose_cert_after.stat.exists }}"
+
+        - name: Say where the terminal now answers
+          ansible.builtin.debug:
+            msg: >-
+              {{ 'https://' + expose_resolved_host + ':' + (expose_tls_port | string)
+                 if expose_cert_after.stat.exists
+                 else 'No certificate yet — the vhost serves only the challenge path. Re-run to try again.' }}

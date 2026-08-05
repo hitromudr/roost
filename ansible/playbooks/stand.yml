@@ -6,17 +6,28 @@
 # Start with --check. The egress policy decides what the agent can reach, and
 # a surprise there is a surprise about your agent's network access.
 #
-# What this deliberately does not do is put a web terminal or a tunnel on the
-# machine. Serving sessions to a phone is somebody else's job: the sessions
-# are plain tmux, anything that speaks tmux works with them, and a machine
-# that already has a terminal of its own does not need a second owner for it.
+# The order is the order a machine needs: something to sandbox, the sandbox,
+# the sessions it runs in, the environment it works in, a terminal to reach it
+# through, and a way in to that terminal.
+#
+# The last two are tagged separately and `roost install` does not run them, on
+# purpose. A machine that already has a web terminal keeps its owner — the
+# `terminal` role refuses rather than becoming the second one — and a machine
+# reached over ssh needs neither. `roost up` runs everything; the pieces are
+# also one command each.
 - name: Configure the agent stand
   hosts: stand
   become: true
   roles:
+    - role: agent_cli
+      tags: [agent]
     - role: egress_sandbox
       tags: [egress]
     - role: agent_sessions
       tags: [sessions]
     - role: env_sync
       tags: [env]
+    - role: terminal
+      tags: [terminal]
+    - role: expose
+      tags: [expose]

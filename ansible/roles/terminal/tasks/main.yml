@@ -1,0 +1,241 @@
+---
+# --- the guard, before anything is touched -------------------------------
+# The whole reason this role can exist. roost installed a web terminal once on
+# a machine that already ran one, gave it a second token, and every request
+# behind the reverse proxy answered 401 — which a browser shows as a machine
+# with no sessions. The unit is the evidence: one that roost wrote leaves a
+# state file behind, and one that appeared any other way belongs to somebody
+# else.
+- name: Look for a terminal already on the machine
+  ansible.builtin.stat:
+    path: "{{ terminal_unit }}"
+  register: terminal_unit_present
+
+- name: Look for roost's own record of installing it
+  ansible.builtin.stat:
+    path: "{{ terminal_state_file }}"
+  register: terminal_state_present
+
+- name: Refuse to become the second owner of a web terminal
+  ansible.builtin.assert:
+    that: not (terminal_unit_present.stat.exists and not terminal_state_present.stat.exists)
+    fail_msg: >-
+      {{ terminal_unit }} exists and roost did not write it
+      ({{ terminal_state_file }} is absent), so this machine already has a
+      terminal with an owner. Installing a second one gives it a second token,
+      and every request through whatever sits in front then answers 401 —
+      which looks like a machine with no sessions rather than like a
+      misconfiguration. Point the terminal you have at the sessions roost
+      starts (they are plain tmux), or remove that unit first if it is
+      abandoned.
+    quiet: true
+
+# --- what pockterm needs to exist at all ---------------------------------
+- name: Install what the terminal needs
+  ansible.builtin.package:
+    name:
+      - tmux
+      - make
+      - git
+    state: present
+
+# The drawer's folder list and the session Makefile both live here. Without the
+# directory, pockterm's installer says so and turns the "+" button off — which
+# reads as a broken terminal on the one device that cannot investigate.
+- name: Create the projects root
+  ansible.builtin.file:
+    path: "{{ terminal_project_dir }}"
+    state: directory
+    owner: "{{ terminal_user }}"
+    group: "{{ terminal_user }}"
+    mode: "0755"
+
+# "HEAD" here means "whatever this repository calls its default branch", and it
+# is resolved to that name rather than passed through: given the literal HEAD,
+# the git module cannot work out the remote's revision and reports a change on
+# every run — measured, as a second `roost up` reporting changed=1 for a
+# checkout nothing had touched. Asking the remote costs one request and keeps
+# the branch name out of this repository, where `main` would be wrong for every
+# project still on `master`.
+# The git module clones and checks out; asking a remote which branch it calls
+# default is not something it does.
+- name: Ask the repository which branch it calls default # noqa: command-instead-of-module
+  ansible.builtin.command: git ls-remote --symref {{ terminal_repo | quote }} HEAD
+  register: terminal_default_ref
+  changed_when: false
+  when: terminal_version == 'HEAD'
+
+- name: Take that as the revision to check out
+  ansible.builtin.set_fact:
+    terminal_resolved_version: >-
+      {{ (terminal_default_ref.stdout | default('')
+          | regex_search('ref:\s+refs/heads/(\S+)', '\1') | default([terminal_version], true) | first)
+         if terminal_version == 'HEAD' else terminal_version }}
+
+- name: Fetch the pockterm source
+  ansible.builtin.git:
+    repo: "{{ terminal_repo }}"
+    dest: "{{ terminal_src }}"
+    version: "{{ terminal_resolved_version }}"
+    update: true
+  register: terminal_checkout
+
+# --- a toolchain able to build it ----------------------------------------
+- name: Ask the system Go for its version
+  ansible.builtin.command: go version
+  register: terminal_go_system
+  changed_when: false
+  failed_when: false
+
+- name: Look for a toolchain roost downloaded earlier
+  ansible.builtin.stat:
+    path: "{{ terminal_go_dir }}/bin/go"
+  register: terminal_go_own
+
+- name: Work out whether that Go is new enough
+  ansible.builtin.set_fact:
+    # `go version` prints "go version go1.19.8 linux/amd64"; the middle field
+    # without its "go" prefix is what compares against the minimum.
+    terminal_go_system_ok: >-
+      {{ (terminal_go_system.rc == 0)
+         and ((terminal_go_system.stdout.split(' ')[2] | default('go0')
+               | regex_replace('^go', '') | regex_replace('^([0-9]+\.[0-9]+).*$', '\1'))
+              is version(terminal_go_min, '>=')) }}
+
+# Both conditions, not just the first: with only the system check, every run
+# re-downloaded 70MB of compiler because the toolchain roost had already put in
+# its own directory is not on anybody's PATH. The unpack step was guarded by
+# `creates` and skipped, so the waste was invisible in the recap — it showed up
+# as a second `roost up` reporting changes for a machine that needed none.
+- name: Install a Go toolchain to build the terminal with
+  when:
+    - not (terminal_go_system_ok | bool)
+    - not terminal_go_own.stat.exists
+  block:
+    # A machine of some other architecture is a real possibility and a
+    # checksum nobody has is not something to improvise: say which
+    # architectures have a pinned toolchain, and let the operator supply a Go
+    # of their own instead.
+    - name: Check there is a pinned toolchain for this architecture
+      ansible.builtin.assert:
+        that: terminal_go_arch in terminal_go_checksums
+        fail_msg: >-
+          No pinned Go toolchain for {{ ansible_architecture }}. Install a Go
+          {{ terminal_go_min }} or newer yourself and re-run — the terminal is
+          built from source because pockterm publishes no build for every
+          architecture either.
+        quiet: true
+
+    - name: Create roost's toolchain directory
+      ansible.builtin.file:
+        path: "{{ terminal_go_dir | dirname }}"
+        state: directory
+        mode: "0755"
+
+    # Downloaded and unpacked in two steps because only the download can check
+    # the sum: `unarchive` fetches a URL happily and has no checksum option at
+    # all. And a checksum is not optional here — this is a compiler being put
+    # on a machine that will run an agent over the operator's own files.
+    - name: Download the Go toolchain
+      ansible.builtin.get_url:
+        url: "{{ terminal_go_base_url }}/{{ terminal_go_tarball }}"
+        dest: "/tmp/{{ terminal_go_tarball }}"
+        checksum: "{{ terminal_go_checksums[terminal_go_arch] }}"
+        mode: "0644"
+
+    - name: Unpack the Go toolchain
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ terminal_go_tarball }}"
+        dest: "{{ terminal_go_dir | dirname }}"
+        remote_src: true
+        creates: "{{ terminal_go_dir }}/bin/go"
+
+    - name: Remove the tarball
+      ansible.builtin.file:
+        path: "/tmp/{{ terminal_go_tarball }}"
+        state: absent
+
+- name: Say which Go will build the terminal
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'using the system Go: ' + (terminal_go_system.stdout | default('') | trim)
+         if terminal_go_system_ok | bool
+         else 'using roost''s own Go in ' + terminal_go_dir
+              + ('' if terminal_go_own.stat.exists else ' (' + terminal_go_version + ', just downloaded)') }}
+
+# --- pockterm's own installer, invoked rather than copied -----------------
+# Everything this does — build or fetch the binary, keep the existing token,
+# write the unit, install the session Makefile, restart only when something
+# changed — is pockterm's. The arguments are the part that is roost's: which
+# account is served, where it listens, and which directory the "+" button
+# starts sessions from.
+- name: Run pockterm's installer
+  ansible.builtin.command:
+    cmd: /bin/bash deploy/install.sh
+    chdir: "{{ terminal_src }}"
+  environment:
+    PATH: "{{ (terminal_go_dir + '/bin:') if not (terminal_go_system_ok | bool) else '' }}{{ ansible_env.PATH }}"
+    POCKTERM_LISTEN: "{{ terminal_listen }}"
+    POCKTERM_USER: "{{ terminal_user }}"
+    POCKTERM_SESSION_DIR: "{{ terminal_project_dir }}"
+  register: terminal_install
+  # The installer says what it did, and only a line about the unit, the token
+  # or a restart means the machine changed. Reporting every run as a change
+  # would make `roost up` look like it rewrote the terminal each time it
+  # confirmed it was fine.
+  changed_when: >-
+    terminal_install.stdout is search('unit →|token generated|service restarted|POCKTERM_SESSION_DIR=')
+  when: not ansible_check_mode
+
+- name: Show what the installer reported
+  ansible.builtin.debug:
+    var: terminal_install.stdout_lines
+  when:
+    - not ansible_check_mode
+    - terminal_install.stdout_lines | default([]) | length > 0
+
+# --- the join between the phone's buttons and the sandbox ----------------
+# pockterm runs `make -C <session dir> <preset>` and that Makefile declares
+# `CLAUDE ?=` and `AGENT ?=`. `?=` yields to the environment, and the service's
+# environment is this file — so these two lines are what make every button on
+# the page start its agent inside the sandbox group. Without them the buttons
+# work and the sandbox does not, which is the failure that looks like success.
+- name: Point the terminal's session buttons at the sandbox
+  ansible.builtin.lineinfile:
+    path: "{{ terminal_env_file }}"
+    regexp: "^{{ item.key }}="
+    line: "{{ item.key }}={{ item.value }}"
+    create: true
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - key: CLAUDE
+      value: "{{ terminal_agent_launcher }}"
+    # The drawer's custom buttons pass a whole command line, which a launcher
+    # that supplies its own command would swallow: `agent-run qwen` starts the
+    # configured agent and hands it "qwen" as an argument. agent-exec runs what
+    # it is given, in the same group.
+    - key: AGENT
+      value: "{{ terminal_agent_exec }}"
+  loop_control:
+    label: "{{ item.key }}"
+  notify: Restart the terminal
+
+- name: Record what roost installed here
+  ansible.builtin.template:
+    src: terminal.env.j2
+    dest: "{{ terminal_state_file }}"
+    mode: "0644"
+
+# Before anything reports success: the port is the claim, and a unit that
+# started and died leaves `systemctl is-active` briefly saying the right thing.
+- name: Flush handlers so the check tests the running terminal
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the terminal to answer
+  ansible.builtin.wait_for:
+    host: "{{ terminal_listen | regex_replace(':[0-9]+$', '') }}"
+    port: "{{ terminal_listen | regex_replace('^.*:', '') | int }}"
+    timeout: 30
+  when: not ansible_check_mode

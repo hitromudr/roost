@@ -1,0 +1,77 @@
+---
+# Writing one file into somebody else's nginx, in the only order that is safe:
+# render, ask nginx whether it parses, and put things back if it does not. A
+# broken file left in conf.d does not only break the terminal — it makes every
+# later `nginx -t` fail, so the owner's next reload of an unrelated vhost fails
+# too, with an error naming a file they never wrote.
+#
+# The previous version is kept in roost's own directory rather than by
+# `backup: true`, which writes it next to the original. That left
+# `roost-terminal.conf.<pid>.<date>~` in /etc/nginx/conf.d — a file nginx does
+# not read (the include wants *.conf) but that teardown does not know about
+# either, which is exactly the kind of litter this project claims not to leave.
+# Seen on the first real machine, 2026-08-05.
+- name: Note whether roost already has a vhost here
+  ansible.builtin.stat:
+    path: "{{ expose_vhost_file }}"
+  register: expose_vhost_before
+
+- name: Keep the version being replaced, in roost's own directory
+  ansible.builtin.copy:
+    src: "{{ expose_vhost_file }}"
+    dest: "{{ expose_state_file | dirname }}/vhost.previous"
+    remote_src: true
+    mode: "0644"
+  when: expose_vhost_before.stat.exists
+
+- name: Write roost's vhost
+  ansible.builtin.template:
+    src: vhost.conf.j2
+    dest: "{{ expose_vhost_file }}"
+    mode: "0644"
+  register: expose_vhost_written
+
+- name: Ask nginx whether it accepts the configuration
+  ansible.builtin.command: nginx -t
+  register: expose_nginx_test
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - expose_vhost_written is changed
+
+- name: Take roost's vhost back out
+  when:
+    - not ansible_check_mode
+    - expose_vhost_written is changed
+    - expose_nginx_test.rc | default(0) != 0
+  block:
+    - name: Restore the version that worked
+      ansible.builtin.copy:
+        src: "{{ expose_state_file | dirname }}/vhost.previous"
+        dest: "{{ expose_vhost_file }}"
+        remote_src: true
+        mode: "0644"
+      when: expose_vhost_before.stat.exists
+
+    - name: Remove the file roost had just added
+      ansible.builtin.file:
+        path: "{{ expose_vhost_file }}"
+        state: absent
+      when: not expose_vhost_before.stat.exists
+
+    - name: Say what nginx objected to
+      ansible.builtin.fail:
+        msg: >-
+          nginx rejected the vhost, so it has been taken back out and this
+          machine's nginx is as it was. What it said:
+          {{ expose_nginx_test.stderr | default(expose_nginx_test.stdout) | trim }}
+
+- name: Reload nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when:
+    - not ansible_check_mode
+    - expose_vhost_written is changed
+    - expose_nginx_test.rc | default(1) == 0

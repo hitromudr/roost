@@ -1,0 +1,86 @@
+# {{ ansible_managed }}
+#
+# roost's own vhost for the web terminal. One file, in nginx's conf.d, added by
+# roost and removed by `roost uninstall` — the rest of this machine's nginx
+# configuration is not roost's to edit.
+#
+# Behind this proxy is a full shell as {{ expose_terminal_user | default('the agent') }}'s
+# account. Treat the URL as SSH.
+
+# The plain-HTTP server exists for two reasons: the ACME challenge that issues
+# the certificate, and to send anyone who typed the bare name to the TLS port.
+# It answers only for this name — requests for anything else on :80 go on
+# reaching whatever served them before.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ expose_resolved_host }};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root {{ expose_webroot }};
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://$host:{{ expose_tls_port }}$request_uri;
+    }
+}
+{% if expose_cert_present | bool %}
+
+# Pass "upgrade" only when the client asked for a WebSocket upgrade. Named for
+# roost so it cannot collide with a map the owner of this nginx already has.
+map $http_upgrade $roost_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen {{ expose_tls_port }} ssl;
+    listen [::]:{{ expose_tls_port }} ssl;
+    server_name {{ expose_resolved_host }};
+
+    ssl_certificate     {{ expose_cert_root }}/{{ expose_resolved_host }}/fullchain.pem;
+    ssl_certificate_key {{ expose_cert_root }}/{{ expose_resolved_host }}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    # A terminal is a shell. Keep it out of search engines and out of other
+    # people's frames.
+    add_header X-Robots-Tag "noindex, nofollow" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    # A screenshot pasted from the phone travels as a request body.
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://{{ expose_upstream }};
+
+        # $http_host, not $host, and this is the line to get wrong. The
+        # terminal refuses a WebSocket upgrade whose Origin does not match the
+        # Host it was asked on, and on a port that is not 443 the browser's
+        # Origin carries that port ("https://name:{{ expose_tls_port }}")
+        # while $host does not. With $host the page loads, the socket opens and
+        # closes immediately, and the terminal looks broken rather than
+        # misconfigured.
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $roost_connection_upgrade;
+
+        # A terminal is idle for as long as you leave it open, and its output
+        # has to arrive as it is produced rather than in batches.
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+}
+{% else %}
+
+# No certificate yet, so no TLS server here: a vhost referring to a
+# fullchain.pem that does not exist fails `nginx -t`, and on a machine with
+# other vhosts that failure blocks reloads for all of them.
+{% endif %}

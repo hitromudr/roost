@@ -1,0 +1,56 @@
+---
+# The web terminal: pockterm on loopback, and the three lines that make its
+# buttons start sandboxed sessions.
+#
+# This role installs pockterm by running pockterm's own installer. It does not
+# reimplement any of it — the binary, the token, the unit and the session
+# Makefile are that project's business, and a second copy of those decisions
+# here would be a copy that drifts. What belongs here is only what makes sense
+# one level up: which account is served, which launcher a session starts
+# through, and the refusal to touch a terminal roost did not install.
+
+terminal_user: "{{ ansible_user_id }}"
+
+# Loopback, always. Reaching it from anywhere else is the `expose` role's
+# problem, and a terminal that listens on a wildcard address before there is a
+# lock on the door is a shell offered to the network.
+terminal_listen: 127.0.0.1:8130
+
+# The projects root: the session Makefile goes here, and the drawer offers this
+# directory's folders as places to start a session in.
+terminal_project_dir: "/home/{{ terminal_user }}/work"
+
+# Where the pockterm source lives on the stand. A checkout that is already
+# there is used as it is; otherwise it is cloned from terminal_repo.
+terminal_src: /opt/roost/pockterm
+terminal_repo: https://github.com/hitromudr/pockterm.git
+terminal_version: HEAD
+
+# pockterm's own files. Named here because the guard below reads them, and
+# because teardown has to remove exactly what was added.
+terminal_env_file: /etc/pockterm/pockterm.env
+terminal_unit: /etc/systemd/system/pockterm.service
+terminal_state_file: /etc/roost/terminal.env
+
+# What a session starts. The whole join between a phone and the sandbox is
+# these two variables: pockterm's Makefile declares `CLAUDE ?=` and `AGENT ?=`,
+# `?=` yields to the environment, and the environment of the service is this
+# role's env file. So the Makefile stays pockterm's and the policy stays
+# roost's, with no third copy of either.
+terminal_agent_launcher: /usr/local/bin/agent-run
+terminal_agent_exec: /usr/local/bin/agent-exec
+
+# A Go toolchain to build pockterm with. Debian 12 packages 1.19 and pockterm
+# needs 1.22, so the packaged one is not enough and there is no published
+# build to fall back on. Installed under roost's own directory rather than
+# /usr/local/go: the operator may want a Go of their own later, and two owners
+# of one path is the mistake this project is named after avoiding.
+terminal_go_dir: /opt/roost/go
+terminal_go_version: "1.26.5"
+terminal_go_min: "1.22"
+terminal_go_checksums:
+  amd64: sha256:5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
+  arm64: sha256:fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
+terminal_go_base_url: https://go.dev/dl
+terminal_go_arch: "{{ 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else 'amd64' }}"
+terminal_go_tarball: "go{{ terminal_go_version }}.linux-{{ terminal_go_arch }}.tar.gz"

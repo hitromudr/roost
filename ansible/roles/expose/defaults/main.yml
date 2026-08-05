@@ -1,0 +1,48 @@
+---
+# A way in for the phone: TLS in front of the terminal, on this machine.
+#
+# The rule this role is built around is the one the project learned the
+# expensive way: roost owns files, not services. On a machine that already runs
+# nginx it writes its own vhost file and its own certificate, checks the
+# configuration, and asks before reloading — because that reload belongs to
+# whoever put nginx there, and a bad file would take their vhosts down with it.
+# Where the front door is held by something roost cannot add a file to (Caddy
+# configured over its admin API, say), it prints what to add and stops.
+
+# What is being published. Loopback on both sides of the proxy: the terminal
+# never listens on anything else.
+expose_upstream: 127.0.0.1:8130
+
+# The name the phone will open. Empty means derive one from the machine's
+# address through sslip.io, which resolves <dashed-ip>.sslip.io to that ip —
+# so a machine with no domain still gets a real certificate and therefore a
+# page a phone can install. Give a domain of your own and it is used instead.
+expose_host: ""
+expose_address: "{{ ansible_default_ipv4.address | default('') }}"
+expose_sslip_suffix: sslip.io
+
+# The port TLS is served on. Not 443: on every machine measured while designing
+# this, 443 already belonged to something — a reverse proxy, an xray endpoint —
+# and taking it would be the mistake this project exists to avoid.
+expose_tls_port: 8443
+
+# auto  — use nginx if it is here, install it if nothing holds :80, else print
+# nginx  — insist on the nginx path and fail if it is not usable
+# print — never touch anything, only print what to add
+# off   — do nothing at all
+expose_front: auto
+
+# Reloading a service roost did not install is the operator's decision. The CLI
+# asks and passes this; a playbook run has to say it out loud.
+expose_reload_allowed: false
+
+# Let's Encrypt. An address is optional — without one, certbot registers
+# without contact, which means no expiry warnings by mail.
+expose_email: ""
+expose_staging: false
+
+# roost's own files.
+expose_webroot: /var/www/roost-acme
+expose_vhost_file: /etc/nginx/conf.d/roost-terminal.conf
+expose_state_file: /etc/roost/expose.env
+expose_cert_root: /etc/letsencrypt/live

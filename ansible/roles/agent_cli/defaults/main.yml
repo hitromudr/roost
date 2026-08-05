@@ -1,0 +1,51 @@
+---
+# The agent binary itself. A sandbox around a command that is not there is a
+# session that closes the instant a phone opens it — `sg` reports "command not
+# found" and the tmux window disappears — so on a machine that has never run an
+# agent, installing one is part of installing the stand.
+#
+# Nothing here decides *how* the agent talks to its provider: that is the
+# sandbox's business (egress_sandbox) and stays the same whether this role ran
+# or the operator installed the agent by hand.
+
+# Account the agent belongs to. Its own binary, its own credentials, its own
+# login: an agent installed for root would not be the one the sessions start.
+agent_cli_user: "{{ ansible_user_id }}"
+
+# Where the official installer puts it. Named here so the role can tell
+# "already installed" from "install it", and so the CLI can read the path back
+# out of the state file below.
+agent_cli_bin_dir: "/home/{{ agent_cli_user }}/.local/bin"
+agent_cli_command: "{{ agent_cli_bin_dir }}/claude"
+
+# Turned off for a stand whose agent arrives some other way — a distribution
+# package, npm, a binary you build yourself. The rest of roost does not care
+# which it was.
+agent_cli_install: true
+
+# Claude Code's own installer. It is used rather than replaced: what it does on
+# each platform is its business, and a copy of that logic here would be a copy
+# that drifts.
+agent_cli_installer_url: https://claude.ai/install.sh
+
+# Proxy for the download. A stand that cannot reach its provider directly
+# usually cannot reach the installer either — measured on a machine where
+# api.anthropic.com answers 403 directly and 401 through the local proxy — so
+# the same URL the sandbox will use is what fetches the agent.
+agent_cli_proxy_url: ""
+
+# Built rather than written out: an empty proxy has to mean "no proxy", and a
+# dictionary with empty values is not that — some tools read an empty
+# https_proxy as an instruction to use a proxy at nowhere.
+agent_cli_download_env: >-
+  {{ {} if (agent_cli_proxy_url | length == 0) else {
+       'https_proxy': agent_cli_proxy_url,
+       'http_proxy': agent_cli_proxy_url,
+       'HTTPS_PROXY': agent_cli_proxy_url,
+       'HTTP_PROXY': agent_cli_proxy_url,
+       'no_proxy': 'localhost,127.0.0.1',
+       'NO_PROXY': 'localhost,127.0.0.1',
+     } }}
+
+# What this role installed, for the CLI to read and for teardown to remove.
+agent_cli_state_file: /etc/roost/agent.env

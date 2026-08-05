@@ -1,0 +1,10 @@
+---
+# Restarting drops every terminal somebody has open, so it happens only when
+# one of roost's own lines in the environment file actually changed — the
+# service reads that file at start, and a line added without a restart is a
+# sandbox that is configured and not in effect.
+- name: Restart the terminal
+  ansible.builtin.systemd:
+    name: pockterm
+    state: restarted
+  when: not ansible_check_mode
