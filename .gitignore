@@ -8,6 +8,12 @@ roost.conf
 projects.conf
 ansible/inventory
 *.log
+
+# Ansible's own working directory next to ansible.cfg: a lock file and empty
+# places for roles and collections it would fetch. Made by every run from the
+# repository root, and carrying nothing worth keeping.
+.ansible/
+
 __pycache__/
 .venv/
 node_modules/
