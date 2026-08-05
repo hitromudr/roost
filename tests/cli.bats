@@ -753,3 +753,81 @@ CONF
     run "$ROOST" doctor
     [[ "$output" == *"the tunnel to roost-tunnel@gate.example is up"* ]]
 }
+
+# --- the environment repository, and rotating the token ------------------
+
+@test "the environment repository reaches the role that lays it out" {
+    write_conf
+    printf 'env_repo=https://git.example/dotfiles.git\nenv_branch=master\nproject_dir=/home/x/work\n' >> "$ROOST_CONF"
+    run "$ROOST" install
+    [ "$status" -eq 0 ]
+    grep -q "env_sync_repo=https://git.example/dotfiles.git" "$STUB_LOG"
+    grep -q "env_sync_version=master" "$STUB_LOG"
+    # Beside the projects, not in a path the role guessed from a home directory:
+    # project_dir is configurable and the environment has to follow it.
+    grep -q "env_sync_dir=/home/x/work/dotfiles" "$STUB_LOG"
+}
+
+@test "no environment repository is not an error, just nothing to lay out" {
+    write_conf
+    run "$ROOST" install
+    [ "$status" -eq 0 ]
+    grep -q "env_sync_repo=" "$STUB_LOG"
+}
+
+@test "rotating the token needs a terminal to rotate it for" {
+    write_conf
+    export ROOST_TERMINAL_STATE="$BATS_TEST_TMPDIR/absent.env"
+    run "$ROOST" token --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nothing to rotate"* ]]
+}
+
+@test "rotating the token asks before it costs every phone its link" {
+    write_conf
+    export ROOST_TERMINAL_STATE="$BATS_TEST_TMPDIR/terminal.env"
+    printf 'TERMINAL_LISTEN=127.0.0.1:8130\n' > "$ROOST_TERMINAL_STATE"
+    run "$ROOST" token < /dev/null
+    [ "$status" -ne 0 ]
+    # Matched on one line of it: the sentence wraps, and a pattern spanning the
+    # break fails for reasons that have nothing to do with the warning.
+    [[ "$output" == *"Every device holding the old link"* ]]
+}
+
+@test "rotating replaces the line rather than adding a second one" {
+    write_conf
+    export ROOST_TERMINAL_STATE="$BATS_TEST_TMPDIR/terminal.env"
+    export ROOST_TERMINAL_ENV="$BATS_TEST_TMPDIR/pockterm.env"
+    export ROOST_POCKTERM_BIN="$STUB_DIR/pockterm"
+    printf 'TERMINAL_LISTEN=127.0.0.1:8130\n' > "$ROOST_TERMINAL_STATE"
+    printf 'POCKTERM_TOKEN=old-token\nPOCKTERM_SESSION_DIR=/home/x/work\n' > "$ROOST_TERMINAL_ENV"
+    # The terminal mints the token; roost only puts it where the service reads it.
+    printf '#!/usr/bin/env bash\ncase "$1" in token) echo new-token ;; qr) echo "QR for $POCKTERM_TOKEN" ;; esac\n' \
+        > "$STUB_DIR/pockterm"
+    # sudo runs the rewrite as root on a real stand; here it runs the same
+    # command as the test user.
+    printf '#!/usr/bin/env bash\nexec "$@"\n' > "$STUB_DIR/sudo"
+    chmod +x "$STUB_DIR/pockterm" "$STUB_DIR/sudo"
+    export ROOST_EXPOSE_STATE="$BATS_TEST_TMPDIR/expose.env"
+    printf 'EXPOSE_URL=https://x:8443\n' > "$ROOST_EXPOSE_STATE"
+
+    run "$ROOST" token --yes
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^POCKTERM_TOKEN=' "$ROOST_TERMINAL_ENV")" -eq 1 ]
+    grep -q '^POCKTERM_TOKEN=new-token$' "$ROOST_TERMINAL_ENV"
+    # Everything else in that file is somebody's setting.
+    grep -q '^POCKTERM_SESSION_DIR=/home/x/work$' "$ROOST_TERMINAL_ENV"
+    # And the service has to be restarted, or the old token is still in effect.
+    grep -q "systemctl restart pockterm" "$STUB_LOG"
+    # The new code is printed, not left to be found.
+    [[ "$output" == *"QR for new-token"* ]]
+}
+
+@test "rotating says the token is not the lock when certificates are" {
+    write_conf
+    printf 'client_auth=mtls\n' >> "$ROOST_CONF"
+    export ROOST_TERMINAL_STATE="$BATS_TEST_TMPDIR/terminal.env"
+    printf 'TERMINAL_LISTEN=127.0.0.1:8130\n' > "$ROOST_TERMINAL_STATE"
+    run "$ROOST" token < /dev/null
+    [[ "$output" == *"client certificates"* ]]
+}

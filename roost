@@ -10,6 +10,7 @@
 #   roost enroll    let one device in, when the lock is client certificates
 #   roost gate      what a machine with no address needs on the far end
 #   roost qr        print the QR code your phone opens
+#   roost token     replace the terminal's shared token
 #   roost doctor    check that the sandbox is what it claims to be
 #   roost projects [--list]         check out the repositories in projects.conf
 #   roost uninstall [--purge]       remove roost from this machine
@@ -50,7 +51,7 @@ bad()  { printf '\033[1;31m  ✗\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[roost]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
-	sed -n '2,15p' "$ROOT/roost" | sed 's/^# \{0,1\}//'
+	sed -n '2,16p' "$ROOT/roost" | sed 's/^# \{0,1\}//'
 }
 
 # --- configuration ------------------------------------------------------
@@ -58,6 +59,13 @@ usage() {
 set_defaults() {
 	egress_profile=pinned agent_command=/usr/local/bin/claude
 	project_dir="$HOME/work"
+	# The environment repository: shell and editor config, agent settings,
+	# whatever else you want the same on every machine. Empty means the role
+	# does nothing, which is the right default — a stand is useful without one.
+	env_repo=""
+	# Its branch. HEAD follows whatever the repository calls default, which is
+	# not the same as `main` on a repository still using `master`.
+	env_branch=HEAD
 	# Further agents, `name:command` separated by commas. Each one gets a
 	# launcher of its own — see agents_json below.
 	agents=""
@@ -180,6 +188,10 @@ cmd_setup() {
 egress_profile=${profile:-pinned}
 agent_command=${agent:-}
 project_dir=$HOME/work
+# The environment repository — shell config, editor, agent settings — laid out
+# on every machine you work from. Empty means there is none.
+env_repo=
+env_branch=HEAD
 # Further agents, name:command, comma-separated. Each gets a launcher of its
 # own — 'codex' below would install /usr/local/bin/codex-safe — sharing the
 # group, the proxy and the profile with the agent above.
@@ -317,6 +329,10 @@ cmd_install() {
 		-e "egress_sandbox_agent_command=$(resolved_agent_command)" \
 		-e "agent_sessions_user=$(id -un)" \
 		-e "agent_sessions_project_dir=$project_dir" \
+		-e "env_sync_user=$(id -un)" \
+		-e "env_sync_repo=$env_repo" \
+		-e "env_sync_version=$env_branch" \
+		-e "env_sync_dir=$project_dir/dotfiles" \
 		-e "{\"egress_sandbox_users\": [\"$(id -un)\"]}" \
 		-e "{\"egress_sandbox_agents\": $(agents_json)}" \
 		${vars:+-e "@$vars"}
@@ -733,6 +749,66 @@ cmd_enroll() {
 	echo
 	echo "  After it is imported, open the terminal itself: roost qr"
 	echo "  If the phone is lost: sudo $CA_BIN revoke $device && sudo systemctl reload nginx"
+}
+
+# cmd_token replaces the terminal's shared token.
+#
+# The one thing the token lock needed and did not have: a way out of a token that
+# has been seen. It lives in a URL, so it is also in browser history and in the
+# front's logs — and until now changing it meant editing pockterm's env file by
+# hand and remembering the restart.
+#
+# It asks first, because the cost is not local: every phone holding the old link
+# stops working, and there is no way to keep one and not another.
+cmd_token() {
+	load_conf
+	local assume_yes=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--yes | -y) assume_yes=1 ;;
+			*) die "unknown option $1 (expected --yes)" ;;
+		esac
+		shift
+	done
+
+	[ -n "$(read_state TERMINAL_LISTEN "$TERMINAL_STATE")" ] ||
+		die "no terminal installed by roost here — nothing to rotate"
+	command -v "$POCKTERM_BIN" >/dev/null ||
+		die "$POCKTERM_BIN is not there — run 'roost terminal'"
+
+	if [ "$client_auth" = mtls ]; then
+		warn "the lock here is client certificates; the token is not what the door asks for"
+	fi
+	if [ -z "$assume_yes" ]; then
+		cat <<EOF
+This replaces the terminal's token. Every device holding the old link stops
+working and has to scan a new code — there is no way to keep one and not another.
+
+EOF
+		local reply
+		read -rp "Proceed? [y/N] " reply
+		case "$reply" in y | Y | yes) ;; *) die "cancelled" ;; esac
+	fi
+
+	local fresh
+	fresh="$("$POCKTERM_BIN" token)" || die "could not generate a token"
+	[ -n "$fresh" ] || die "the terminal produced an empty token"
+
+	# Rewritten in place rather than appended: systemd reads the last assignment
+	# in the file, so a second POCKTERM_TOKEN line makes "did it change?" depend
+	# on file order.
+	if sudo grep -q '^POCKTERM_TOKEN=' "$TERMINAL_ENV" 2>/dev/null; then
+		sudo sed -i "s|^POCKTERM_TOKEN=.*|POCKTERM_TOKEN=$fresh|" "$TERMINAL_ENV"
+	else
+		printf 'POCKTERM_TOKEN=%s\n' "$fresh" | sudo tee -a "$TERMINAL_ENV" >/dev/null
+	fi
+	sudo chmod 600 "$TERMINAL_ENV"
+	# The service reads that file when it starts, so without this the old token
+	# is still the one in effect and the new code would open a 401.
+	sudo systemctl restart pockterm
+	ok "the token is replaced, and the terminal restarted to read it"
+	echo
+	cmd_qr
 }
 
 # cmd_qr ends the install with something to point a camera at. The pieces come
@@ -1194,6 +1270,7 @@ case "${1:-help}" in
 	tunnel)    shift; cmd_tunnel "$@" ;;
 	gate)      shift; cmd_gate "$@" ;;
 	qr)        shift; cmd_qr "$@" ;;
+	token)     shift; cmd_token "$@" ;;
 	projects)  shift; cmd_projects "$@" ;;
 	uninstall) shift; cmd_uninstall "$@" ;;
 	doctor)    shift; cmd_doctor "$@" ;;

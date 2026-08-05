@@ -51,6 +51,21 @@ agents=
 # Where projects live. Sessions are named after directories here.
 project_dir=/home/you/work
 
+# The environment repository: shell and editor config, agent settings — whatever
+# you want the same on every machine you work from. It is checked out to
+# <project_dir>/dotfiles and its own installer is run (./install.sh), so what a
+# machine gets is decided by that repository and not by roost.
+#
+# If it carries encrypted files (*.sops.*), the age key has to be in place first:
+# without it the secrets stay encrypted while the installer reports success, and
+# the role refuses rather than let that happen quietly.
+#
+# Empty means there is none, which is a perfectly good stand.
+env_repo=
+# HEAD follows whatever the repository calls its default branch — `main` is the
+# wrong guess for every repository still on `master`.
+env_branch=HEAD
+
 # --- the terminal, and the way in --------------------------------------
 # A web terminal is installed only where there is none: a pockterm.service
 # this machine already has keeps its owner, and roost says so and stops.

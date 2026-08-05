@@ -128,7 +128,9 @@ Ansible roles:
   out, not which machine is the source. Skips checkouts with uncommitted work
   and names taken by something that is not a checkout.
 - `env_sync` (any machine) — the environment repository and its installer,
-  with an age-key check for repositories carrying encrypted files.
+  with an age-key check for repositories carrying encrypted files. Configured by
+  `env_repo` / `env_branch` in `roost.conf`; until 2026-08-05 it had no keys at
+  all, so the README described something nobody could switch on.
 
 Run playbooks from the repository root — `ansible.cfg` there points at
 `ansible/roles`. The roles use `ansible.builtin` only: no collections to

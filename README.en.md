@@ -7,9 +7,49 @@ single-board computer, a mini PC, an old laptop, a VPS — gets a sandbox with a
 predictable way out to the internet, the agent itself, tmux sessions per project,
 your own checkouts, and a web terminal to reach all of it from a phone.
 
-> **Status: work in progress.** Everything below is written and verified on real
-> hardware; installation is idempotent and teardown returns the machine to how it
-> started. What is not yet verified is said where it applies.
+## How it works
+
+One chain, and everything else in this file is a part of it:
+
+```
+phone → front with a lock (TLS) → terminal on loopback → tmux session → agent-run → agent
+                                                                                      ↓
+                                                                      out only through a proxy
+```
+
+- **The agent** lives in the `agent-sandbox` group. `gid-owner` rules allow that
+  group loopback only — which means the local proxy, and the proxy is outside the
+  sandbox. The exit becomes predictable and stops depending on where the machine
+  currently is.
+- **A session** is plain tmux, starting the agent through the `agent-run` wrapper.
+  Plain enough that `ssh -t` or `mosh` work with it, not only the terminal below.
+- **The terminal** is [pockterm](https://github.com/hitromudr/pockterm): a
+  separate project, one Go binary with a mobile PWA inside it. It lists tmux
+  sessions and attaches to the one you pick; it **does not create** sessions —
+  a Makefile does, and roost points that Makefile at `agent-run`. It listens on
+  loopback only.
+- **The front** is TLS and a lock in front of the terminal: nginx on this machine
+  if it has an address, or a gate if it has none.
+
+Three words used as terms from here on:
+
+| Word | Means |
+|---|---|
+| **stand** | the machine agents live on: sandbox, sessions, terminal |
+| **gate** | a machine with a public address, through which a stand behind NAT is reachable |
+| **session** | a tmux session per project, `roost-<project>`, with an agent in it |
+
+## What the machine has to offer
+
+- Linux with systemd and `sudo`; one of `apt`, `dnf`, `pacman`, `zypper` or
+  `apk` — ansible roost installs itself.
+- A free port for TLS (`8443` by default) and, if the terminal is installed,
+  ~200MB for building it: the Go toolchain is downloaded into `/opt/roost` and
+  goes with teardown.
+- A domain is **not** required: the name is derived from the machine's address
+  through `sslip.io`.
+- A public address is not required either: a machine behind NAT needs a gate —
+  a second machine with an address and an sshd.
 
 ## Quick start
 
@@ -24,79 +64,17 @@ One command, in this order:
 2. installs ansible, if it is missing;
 3. installs the agent, if it is missing;
 4. creates the sandbox group and the egress rules;
-5. brings up the web terminal on loopback;
+5. brings up the terminal on loopback and points its buttons at `agent-run`;
 6. opens a way to it: a certificate and roost's own vhost — or a tunnel to a gate;
 7. prints a QR code for your phone and runs `roost doctor`.
 
 On the phone: scan the code, then "add to home screen" — the page behaves like an
-app, in its own window without tabs.
+app, in its own window without tabs. Logging the agent into its provider happens
+from there: the session opens its ordinary login screen.
 
 Every step is also a command of its own, because each touches something the
 machine may already have an owner for. `roost install` still means exactly what it
-always did — sandbox, sessions, environment — and installs no web terminal.
-
-## What ends up on the machine
-
-| Part | What it is | Where |
-|---|---|---|
-| sandbox | the `agent-sandbox` group and `gid-owner` rules: out only through a proxy | `/usr/local/sbin/egress-firewall`, unit `egress-firewall` |
-| launchers | `agent-run` (start the agent in the group) and `agent-exec` (start any command in it) | `/usr/local/bin` |
-| agent | the agent binary, installed through that same proxy | `~/.local/bin/claude` by default |
-| sessions | tmux sessions per project, `roost-<project>`, mouse mode for phones | `roost-session` |
-| terminal | pockterm on loopback, installed by pockterm's own installer | unit `pockterm`, `/etc/pockterm` |
-| way in | roost's own vhost and certificate — or a reverse tunnel to a gate | `/etc/nginx/conf.d/roost-terminal.conf` |
-| state | what roost installed, so that teardown knows what to remove | `/etc/roost/*.env` |
-
-## Commands
-
-| Command | What it does |
-|---|---|
-| `roost up` | all of it in order: agent, sandbox, terminal, way in, QR |
-| `roost setup` | questions; answers go to `roost.conf` |
-| `roost install` | sandbox, sessions, environment |
-| `roost agent` | installs the agent if it is missing; records the path it found |
-| `roost terminal` | a web terminal — only where there is none |
-| `roost expose` | TLS in front of the terminal, on this machine |
-| `roost tunnel` | a reverse tunnel to a gate, for a machine with no address |
-| `roost gate [--apply]` | prints (or installs) what the gate needs |
-| `roost enroll <device>` | issues a client certificate for one device |
-| `roost qr` | the QR code with the address and the token |
-| `roost projects [--list]` | brings this machine up to `projects.conf` |
-| `roost doctor` | checks the stand is what it claims to be |
-| `roost uninstall [--purge]` | removes what roost installed |
-
-## Configuration
-
-All of it in `roost.conf`; `roost setup` writes it from your answers, and
-[`roost.conf.example`](roost.conf.example) explains every line. The file is
-gitignored: it holds one machine's addresses and credentials.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `egress_profile` | `pinned` | `pinned` — loopback only, out through a local proxy; `proxied` — plus named destinations; `direct` — no restrictions |
-| `proxy_url` | empty | the proxy the agent goes out through. Written to `/etc/roost/agent-proxy.env` (0640) |
-| `expected_exit` | empty | the address the agent's traffic **should** leave from. `doctor` compares |
-| `agent_command` | empty | the agent binary. Empty means roost installs Claude Code and records the path here |
-| `agents` | empty | further agents, `name:command`, comma-separated |
-| `project_dir` | `~/work` | where projects live; sessions are named after directories here |
-| `terminal` | `true` | whether to install the web terminal |
-| `listen` | `127.0.0.1:8130` | the terminal's address. Loopback only |
-| `gate` | empty | `user@host` of a machine with a public address, when this one has none |
-| `public_host` | empty | the domain for your phone. Empty derives an `sslip.io` name from the machine's address |
-| `tls_port` | `8443` | the TLS port. Not 443: on a machine that does anything, it already belongs to something |
-| `client_auth` | `token` | the lock: `token` or `mtls` |
-| `email` | empty | contact address for Let's Encrypt |
-
-> **Check the exit address before you log an agent in.** A proxy that answers is
-> not the same as a proxy that changes where you come from: a local `3proxy` on
-> the same server sends the traffic out of that server's own address. A request
-> from an address the provider does not expect is grounds for suspending the
-> account. `roost doctor` prints the address it found and compares it with
-> `expected_exit`; while that is empty it says there was nothing to compare
-> against.
-
-The `pinned` and `proxied` profiles with no `PROXY_URL` leave the agent with **no
-network at all** — it fails on its first request, and `doctor` says so.
+always did — sandbox, sessions, environment — and installs no terminal.
 
 ## Reaching it from a phone
 
@@ -143,7 +121,8 @@ does not do that.
 | what holds the door | a string in the URL your phone saved | a client certificate on the device |
 | how many steps | one: scan the QR | two: install the certificate, then open the terminal |
 | where the secret lives | browser history and the front's logs | the phone's own store, not readable out of it |
-| a lost phone | change the token, and reconnect every device | `roost-ca revoke <device>` — the others are untouched |
+| changing it | `roost token` — every phone scans a new code | `roost enroll <device>`, one device at a time |
+| a lost phone | rotate the token: the other devices reconnect too | `roost-ca revoke <device>` — the others are untouched |
 
 Give a device its certificate:
 
@@ -160,14 +139,65 @@ Take a lost device back out:
 sudo roost-ca revoke phone && sudo systemctl reload nginx
 ```
 
-### The session buttons go through the sandbox
+The buttons in the session drawer — the ones that start a session from the phone —
+start the agent **through `agent-run`**, which is to say inside the sandbox.
+`roost doctor` checks exactly this: buttons that work while sandboxing nothing
+look like success. How that join is made is in [Why it is like
+this](#why-it-is-like-this).
 
-The buttons in the session drawer start the agent inside the sandbox group rather
-than beside it. The join is two lines in the service's environment file: pockterm
-declares `CLAUDE ?=` and `AGENT ?=` in its Makefile, and `?=` yields to the
-environment. The Makefile stays pockterm's, the policy stays roost's. `doctor`
-checks exactly this — buttons that work while sandboxing nothing look like
-success.
+## Commands
+
+| Command | What it does |
+|---|---|
+| `roost up` | all of it in order: agent, sandbox, terminal, way in, QR |
+| `roost setup` | questions; answers go to `roost.conf` |
+| `roost install` | sandbox, sessions, environment |
+| `roost agent` | installs the agent if it is missing; records the path it found |
+| `roost terminal` | the terminal — only where there is none |
+| `roost expose` | TLS in front of the terminal, on this machine |
+| `roost tunnel` | a reverse tunnel to a gate, for a machine with no address |
+| `roost gate [--apply]` | prints (or installs) what the gate needs |
+| `roost enroll <device>` | issues a client certificate for one device |
+| `roost qr` | the QR code with the address and the token |
+| `roost token` | replaces the terminal's token and prints the new code |
+| `roost projects [--list]` | brings this machine up to `projects.conf` |
+| `roost doctor` | checks the stand is what it claims to be |
+| `roost uninstall [--purge]` | removes what roost installed |
+
+## Configuration
+
+All of it in `roost.conf`; `roost setup` writes it from your answers, and
+[`roost.conf.example`](roost.conf.example) explains every line. The file is
+gitignored: it holds one machine's addresses and credentials.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `egress_profile` | `pinned` | `pinned` — loopback only, out through a local proxy; `proxied` — plus named destinations; `direct` — no restrictions |
+| `proxy_url` | empty | the proxy the agent goes out through. Written to `/etc/roost/agent-proxy.env` (0640) |
+| `expected_exit` | empty | the address the agent's traffic **should** leave from. `doctor` compares |
+| `agent_command` | empty | the agent binary. Empty means roost installs Claude Code and records the path here |
+| `agents` | empty | further agents, `name:command`, comma-separated |
+| `project_dir` | `~/work` | where projects live; sessions are named after directories here |
+| `env_repo` | empty | the environment repository: shell, editor and agent config |
+| `env_branch` | `HEAD` | its branch; `HEAD` follows whatever the repository calls default |
+| `terminal` | `true` | whether to install the terminal |
+| `listen` | `127.0.0.1:8130` | the terminal's address. Loopback only |
+| `gate` | empty | `user@host` of a machine with a public address, when this one has none |
+| `public_host` | empty | the domain for your phone. Empty derives an `sslip.io` name from the machine's address |
+| `tls_port` | `8443` | the TLS port. Not 443: on a machine that does anything, it already belongs to something |
+| `client_auth` | `token` | the lock: `token` or `mtls` |
+| `email` | empty | contact address for Let's Encrypt |
+
+> **Check the exit address before you log an agent in.** A proxy that answers is
+> not the same as a proxy that changes where you come from: a local `3proxy` on
+> the same server sends the traffic out of that server's own address. A request
+> from an address the provider does not expect is grounds for suspending the
+> account. `roost doctor` prints the address it found and compares it with
+> `expected_exit`; while that is empty it says there was nothing to compare
+> against.
+
+The `pinned` and `proxied` profiles with no `PROXY_URL` leave the agent with **no
+network at all** — it fails on its first request, and `doctor` says so.
 
 ## Projects and environment
 
@@ -184,10 +214,10 @@ on the stand and on your laptop. Nothing already there is overwritten: a checkou
 with uncommitted work is named and skipped, so is a name held by a directory with
 no `.git` in it, and the rest of the list is still checked out.
 
-The environment (`env_sync`) works the same way: your config repository is put in
-place and its own installer runs. If it carries encrypted files (`*.sops.*`), the
-role insists the age key is present — without it the secrets stay encrypted while
-the installer reports success.
+The environment comes from `env_repo`: that repository is put in
+`<project_dir>/dotfiles` and its own installer runs (`./install.sh`). If it
+carries encrypted files (`*.sops.*`), the role insists the age key is present —
+without it the secrets stay encrypted while the installer reports success.
 
 ## A second agent
 
@@ -216,6 +246,19 @@ them:
 4. **Everything added comes out by name.** Teardown reads the state files;
    pockterm is removed by its own uninstaller.
 
+What actually appears on the machine:
+
+| Part | Where |
+|---|---|
+| the rules and their unit | `/usr/local/sbin/egress-firewall`, unit `egress-firewall` |
+| launchers: `agent-run`, `agent-exec`, `roost-session` | `/usr/local/bin` |
+| the agent | `~/.local/bin/claude` by default |
+| the terminal | unit `pockterm`, `/etc/pockterm`, sources and toolchain in `/opt/roost` |
+| the front | `/etc/nginx/conf.d/roost-terminal.conf` |
+| the authority (with `mtls`) | `/etc/roost/ca` (0700) |
+| the tunnel (with `gate=`) | unit `roost-tunnel`, key in `/etc/roost/tunnel` |
+| what roost installed | `/etc/roost/*.env` |
+
 ## Security model
 
 The sandbox here is about predictable outbound traffic, not about containing
@@ -231,6 +274,19 @@ addresses, the repository list — is configuration: `roost.conf`, `projects.con
 and `ansible/inventory` are gitignored, and only their `.example` counterparts
 travel.
 
+## What is verified, and how
+
+| Claim | By what |
+|---|---|
+| installation is idempotent; a second run changes nothing | a live VPS, three `roost up` runs |
+| teardown returns the machine to how it started | a live VPS: no rules, no group, no units; the neighbours' nginx intact |
+| the rules reject direct egress and leave nothing behind | container (`egress_container.sh`) |
+| a session started from a phone runs the agent in the group | a live VPS: the process tree and `Groups:` |
+| a certificate gets in; a foreign or revoked one does not | container (`mtls_container.sh`) |
+| the forward holds; the key gets neither a shell nor a second forward | container (`tunnel_container.sh`) |
+| a gate and a stand as two live machines | **not verified** |
+| installing the PWA and importing a certificate on a phone | **not verified** |
+
 ## Development
 
 ```bash
@@ -240,17 +296,8 @@ make test-integration  # three suites in throwaway containers (needs docker)
 ```
 
 The `projects` and `env_sync` roles are run for real against throwaway
-directories — ansible is all they need. The container suites cover what cannot be
-covered without root and a network:
-
-| Suite | What it proves |
-|---|---|
-| `egress_container.sh` | direct egress rejected for the group, the local proxy still reachable, processes outside unaffected, re-applying changes nothing, no rules left after `clear` |
-| `mtls_container.sh` | no certificate is refused, a certificate gets in, somebody else's is refused, the enrolment path stays open, a revoked certificate stops working |
-| `tunnel_container.sh` | the forward holds, the gate reaches the terminal on the stand, the key gets neither a shell nor a second forward |
-
-The roles use `ansible.builtin` only — no collections to install. Run playbooks
-from the repository root: `ansible.cfg` is there.
+directories — ansible is all they need. The roles use `ansible.builtin` only; run
+playbooks from the repository root, where `ansible.cfg` is.
 
 ## Removing it
 
@@ -263,7 +310,7 @@ from the repository root: `ansible.cfg` is there.
 | Goes | Stays |
 |---|---|
 | the rules and their unit, the launchers, the session helper, `/etc/roost` | your projects and any running sessions |
-| the web terminal (through its own uninstaller), the vhost file, the build toolchain | the agent binary, and whatever it is logged in as |
+| the terminal (through its own uninstaller), the vhost file, the build toolchain | the agent binary, and whatever it is logged in as |
 | the tunnel: its unit and its key | the certificate — it is still valid |
 | the certificate authority and the enrolment directory | everything roost did not install |
 
@@ -274,7 +321,14 @@ remove it.
 
 The decisions that would otherwise look arbitrary.
 
-**Why roost never becomes a second owner.** An early version installed the web
+**Why the terminal's buttons start the agent through a wrapper.** pockterm
+declares `CLAUDE ?=` and `AGENT ?=` in its session Makefile, and `?=` yields to
+the environment; the service's environment is its env file. roost owns two lines
+there, the Makefile stays pockterm's, and no third copy of the policy appears. The
+alternative — a Makefile of roost's own — would be a copy that drifts the first
+time pockterm edits its one.
+
+**Why roost never becomes a second owner.** An early version installed the
 terminal itself, and on a machine that already had one it generated a second
 token — one the reverse proxy in front knew nothing about. Every request answered
 `401`, which a browser renders as a machine with no sessions, and an evening went
@@ -296,7 +350,7 @@ what else that nginx serves, and must not be the thing that reloads it by
 surprise.
 
 **Why `install` did not grow into `up`.** Machines that already call `install`
-must not acquire a web terminal on their next update.
+must not acquire a terminal on their next update.
 
 The full record of decisions is in
 [`docs/superpowers/specs/`](docs/superpowers/specs/).
