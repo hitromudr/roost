@@ -12,9 +12,7 @@ your own checkouts, and a web terminal to reach all of it from a phone.
 One chain, and everything else in this file is a part of it:
 
 ```
-phone → front with a lock (TLS) → terminal on loopback → tmux session → agent-run → agent
-                                                                                      ↓
-                                                                      out only through a proxy
+phone → front (TLS) → terminal on loopback → tmux session → agent-run → agent
 ```
 
 - **The agent** lives in the `agent-sandbox` group. `gid-owner` rules allow that
@@ -39,13 +37,13 @@ Three words used as terms from here on:
 | **gate** | a machine with a public address, through which a stand behind NAT is reachable |
 | **session** | a tmux session per project, `roost-<project>`, with an agent in it |
 
-## What the machine has to offer
+## What the machine needs
 
 - Linux with systemd and `sudo`; one of `apt`, `dnf`, `pacman`, `zypper` or
-  `apk` — ansible roost installs itself.
+  `apk` — roost installs ansible itself.
 - A free port for TLS (`8443` by default) and, if the terminal is installed,
-  ~200MB for building it: the Go toolchain is downloaded into `/opt/roost` and
-  goes with teardown.
+  ~200MB for building it: the Go toolchain is downloaded into `/opt/roost`, and
+  teardown removes it.
 - A domain is **not** required: the name is derived from the machine's address
   through `sslip.io`.
 - A public address is not required either: a machine behind NAT needs a gate —
@@ -254,7 +252,7 @@ What actually appears on the machine:
 | launchers: `agent-run`, `agent-exec`, `roost-session` | `/usr/local/bin` |
 | the agent | `~/.local/bin/claude` by default |
 | the terminal | unit `pockterm`, `/etc/pockterm`, sources and toolchain in `/opt/roost` |
-| the front | `/etc/nginx/conf.d/roost-terminal.conf` |
+| the front | `/etc/nginx/conf.d/roost-terminal.conf` — here, or on the gate when there is one |
 | the authority (with `mtls`) | `/etc/roost/ca` (0700) |
 | the tunnel (with `gate=`) | unit `roost-tunnel`, key in `/etc/roost/tunnel` |
 | what roost installed | `/etc/roost/*.env` |

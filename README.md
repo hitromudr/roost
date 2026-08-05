@@ -12,9 +12,7 @@
 Одна цепочка, и всё остальное в этом файле — её части:
 
 ```
-телефон → фронт с замком (TLS) → терминал на loopback → tmux-сессия → agent-run → агент
-                                                                                    ↓
-                                                                   выход только через прокси
+телефон → фронт (TLS) → терминал на loopback → сессия tmux → agent-run → агент
 ```
 
 - **Агент** живёт в группе `agent-sandbox`. Правила `gid-owner` разрешают ей
@@ -248,7 +246,7 @@ agents=codex:/home/you/.local/bin/codex
 | пускатели: `agent-run`, `agent-exec`, `roost-session` | `/usr/local/bin` |
 | агент | `~/.local/bin/claude` по умолчанию |
 | терминал | юнит `pockterm`, `/etc/pockterm`, исходники и тулчейн в `/opt/roost` |
-| фронт | `/etc/nginx/conf.d/roost-terminal.conf` |
+| фронт | `/etc/nginx/conf.d/roost-terminal.conf` — здесь или на гейте, если он есть |
 | удостоверяющий центр (при `mtls`) | `/etc/roost/ca` (0700) |
 | туннель (при `gate=`) | юнит `roost-tunnel`, ключ в `/etc/roost/tunnel` |
 | что именно roost поставил | `/etc/roost/*.env` |
