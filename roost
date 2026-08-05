@@ -63,6 +63,16 @@ set_defaults() {
 	# The web terminal, and the way in to it.
 	terminal=true
 	listen=127.0.0.1:8130
+	# The address the agent's traffic is expected to leave from. The whole
+	# point of the pinned profile is that this does not depend on where the
+	# machine is — so it is worth stating, and worth checking before an agent
+	# ever runs: an account can be suspended over one request from an address
+	# its owner did not expect.
+	#
+	# Empty means unchecked, and `doctor` says so rather than staying quiet.
+	expected_exit=""
+	# Where to ask. Any service that answers with the caller's address.
+	exit_probe=https://ifconfig.me
 	# Empty derives a name from this machine's address through sslip.io, so a
 	# machine with no domain still gets a real certificate.
 	public_host=""
@@ -642,11 +652,45 @@ cmd_doctor() {
 		failed=1
 	fi
 
-	# Does the sandbox actually reach the provider? The two checks above prove
-	# a policy exists and a proxy is named; this one is the only one that
-	# proves the combination works, and it is the difference between a stand
-	# and a stand-shaped set of files. Run inside the group, so it answers the
-	# question the agent will ask.
+	# Which address does the agent's traffic leave from?
+	#
+	# This is the claim the pinned profile exists for, and until 2026-08-05 it
+	# was the one claim nothing checked: the first stand set up from a config
+	# file was pointed at a local proxy that answered, and nobody asked where
+	# that proxy came out — it came out of the machine's own address, which is
+	# the one thing a fixed exit is supposed to stop mattering. Getting this
+	# wrong costs an account, not a debugging session, so the answer is printed
+	# whether or not there is an expectation to compare it against.
+	if [ "$egress_profile" != direct ] && command -v curl >/dev/null; then
+		local group exit_addr own_addr
+		group="$(sed -n 's/^AGENT_GROUP=//p' "$AGENT_RUN_ENV" 2>/dev/null | tail -n1)"
+		if [ -n "$group" ] && grep -qs '^PROXY_URL=..*' "$PROXY_ENV"; then
+			exit_addr="$(sg "$group" -c "set -a; . $PROXY_ENV; export HTTPS_PROXY=\$PROXY_URL; curl -s --max-time 15 $exit_probe" </dev/null 2>/dev/null | tr -d '[:space:]' || true)"
+			own_addr="$(curl -s --max-time 15 "$exit_probe" 2>/dev/null | tr -d '[:space:]' || true)"
+			if [ -z "$exit_addr" ]; then
+				warn "could not work out which address the agent goes out from ($exit_probe did not answer)"
+			elif [ -n "$expected_exit" ] && [ "$exit_addr" != "$expected_exit" ]; then
+				bad "the agent goes out from $exit_addr, and expected_exit says $expected_exit"
+				echo "      an unexpected exit address is how accounts get suspended — check"
+				echo "      PROXY_URL in $PROXY_ENV before starting an agent that is logged in"
+				failed=1
+			elif [ -n "$expected_exit" ]; then
+				ok "the agent goes out from $exit_addr, as expected"
+			elif [ -n "$own_addr" ] && [ "$exit_addr" = "$own_addr" ]; then
+				warn "the agent goes out from $exit_addr — this machine's own address"
+				echo "      the proxy changes nothing: the profile is predictable but not"
+				echo "      separate. Set expected_exit in $CONF once you know what it"
+				echo "      should be."
+			else
+				warn "the agent goes out from $exit_addr (expected_exit is not set, so nothing was compared)"
+			fi
+		fi
+	fi
+
+	# Does the sandbox actually reach the provider? The check above says where
+	# traffic comes out; this one says it arrives. Both are needed: a proxy can
+	# have the right address and refuse the destination, or reach it from an
+	# address that gets the account banned.
 	if [ "$egress_profile" != direct ] && command -v curl >/dev/null; then
 		local group code
 		group="$(sed -n 's/^AGENT_GROUP=//p' "$AGENT_RUN_ENV" 2>/dev/null | tail -n1)"

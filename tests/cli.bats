@@ -474,3 +474,76 @@ CONF
     run "$ROOST" doctor
     [[ "$output" == *"go through the sandbox"* ]]
 }
+
+# --- which address the agent goes out from -------------------------------
+# The claim the pinned profile exists for, and the one that costs an account
+# rather than an afternoon when it is wrong. Until 2026-08-05 nothing checked
+# it: a stand was pointed at a local proxy that answered, and the proxy came
+# out of the machine's own address.
+#
+# The stubs stand in for the two things the check uses: `sg`, which runs its
+# command in the group, and `curl`, which answers differently depending on
+# whether it was handed a proxy — that is how the two addresses in the check
+# are told apart.
+exit_stubs() {
+    export ROOST_PROXY_ENV="$BATS_TEST_TMPDIR/proxy.env"
+    export ROOST_AGENT_RUN_ENV="$BATS_TEST_TMPDIR/agent-run.env"
+    printf 'PROXY_URL=http://user:pass@127.0.0.1:8129\n' > "$ROOST_PROXY_ENV"
+    printf 'AGENT_GROUP=agent-sandbox\n' > "$ROOST_AGENT_RUN_ENV"
+    cat > "$STUB_DIR/sg" <<'STUB'
+#!/usr/bin/env bash
+# sg <group> -c <command>: run it, as the real one does.
+shift 2
+bash -c "$1"
+STUB
+    cat > "$STUB_DIR/curl" <<STUB
+#!/usr/bin/env bash
+for arg in "\$@"; do
+    case "\$arg" in
+        *api.anthropic.com*) printf 401; exit 0 ;;
+        *8443*) printf 200; exit 0 ;;
+    esac
+done
+# The address probe: through the proxy, or from the machine itself.
+if [ -n "\${HTTPS_PROXY:-}" ]; then printf '%s\n' "${1:-198.51.100.7}"
+else printf '%s\n' "${2:-203.0.113.5}"; fi
+STUB
+    chmod +x "$STUB_DIR/sg" "$STUB_DIR/curl"
+}
+
+@test "doctor says which address the agent goes out from" {
+    write_conf
+    exit_stubs 198.51.100.7 203.0.113.5
+    run "$ROOST" doctor
+    [[ "$output" == *"goes out from 198.51.100.7"* ]]
+}
+
+@test "an exit address that is not the expected one is a failure, not a note" {
+    write_conf
+    printf 'expected_exit=192.0.2.1\n' >> "$ROOST_CONF"
+    exit_stubs 198.51.100.7 203.0.113.5
+    run "$ROOST" doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"198.51.100.7"* ]]
+    [[ "$output" == *"192.0.2.1"* ]]
+    [[ "$output" == *"suspended"* ]]
+}
+
+@test "the expected exit address is confirmed when it matches" {
+    write_conf
+    printf 'expected_exit=198.51.100.7\n' >> "$ROOST_CONF"
+    exit_stubs 198.51.100.7 203.0.113.5
+    run "$ROOST" doctor
+    [[ "$output" == *"as expected"* ]]
+}
+
+# The case that actually happened: a proxy that answers, and comes out of the
+# machine it runs on. Nothing is broken and nothing is gained — worth saying,
+# because "the sandbox has a proxy" reads as approval.
+@test "a proxy that comes out of this machine's own address is called out" {
+    write_conf
+    exit_stubs 203.0.113.5 203.0.113.5
+    run "$ROOST" doctor
+    [[ "$output" == *"this machine's own address"* ]]
+    [[ "$output" == *"changes nothing"* ]]
+}

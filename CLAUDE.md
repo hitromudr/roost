@@ -122,7 +122,19 @@ ships.
 `tests/*.bats`. The wrapper and the shell scripts are tested with stubs; the
 `projects` and `env_sync` roles are run for real by `ansible-playbook` against
 throwaway directories — no docker, no root, skipped where ansible is absent
-(CI installs ansible-lint, not ansible). `tests/integration/` needs docker.
+(CI installs ansible-lint, not ansible).
+
+`make test-integration` proves the egress policy in a throwaway container
+(`tests/integration/egress_container.sh`): direct egress rejected for the group,
+the local proxy still reachable, processes outside the group unaffected,
+re-applying changes nothing, and no rules left in either address family after
+`clear`. It needs docker — which the RPi5 has, and which works from inside the
+agent sandbox, so **run it there rather than assuming it cannot be run**. It was
+first run on 2026-08-05 and passed all eight checks.
+
+What no script can answer is which address the agent's traffic leaves from —
+`roost doctor` asks that now, and it is the check to look at first on a machine
+whose proxy you did not set up yourself.
 
 **A suite that also runs on a stand is a suite that must not read the stand.**
 Two tests passed in CI and failed on the machine the roles manage, both for the

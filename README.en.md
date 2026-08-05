@@ -204,6 +204,16 @@ The `projects` and `env_sync` roles are covered by tests that run them for
 real against throwaway directories — ansible is all they need, no docker and
 no root. Where ansible is absent, those tests skip.
 
+`make test-integration` proves the policy itself in a throwaway container:
+direct egress rejected for the group, the local proxy still reachable, processes
+outside the group unaffected, re-applying changes nothing, and no rules left in
+either address family after `clear`. It needs docker.
+
+What no test can answer is which address the agent leaves from. `roost doctor`
+asks that, and on a machine whose proxy you did not set up yourself it is the
+line to read first: an unexpected exit address costs an account, not an
+afternoon.
+
 ## Removing it
 
 ```bash
