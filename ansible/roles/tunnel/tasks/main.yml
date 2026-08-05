@@ -1,0 +1,107 @@
+---
+- name: Check there is a gate to reach
+  ansible.builtin.assert:
+    that: tunnel_gate | length > 0
+    fail_msg: >-
+      tunnel_gate is empty. A machine behind NAT needs somewhere with a routable
+      address to be reached through — give `gate=user@host` in roost.conf. A
+      machine that has a public address of its own does not need this role at
+      all: `roost expose` serves the terminal there directly.
+    quiet: true
+
+# user@host, user@host:port. Split here rather than in the template so that a
+# malformed value fails on this task, with this message, instead of producing a
+# unit that ssh refuses in a way nobody reads.
+- name: Work out the gate's parts
+  ansible.builtin.set_fact:
+    tunnel_gate_target: "{{ tunnel_gate.split(':')[0] }}"
+    tunnel_gate_port: "{{ tunnel_gate.split(':')[1] if ':' in tunnel_gate else '' }}"
+
+- name: Check the gate says who to connect as
+  ansible.builtin.assert:
+    that: "'@' in tunnel_gate_target"
+    fail_msg: >-
+      tunnel_gate is '{{ tunnel_gate }}' — expected user@host or user@host:port.
+      The account matters: it is a restricted one on the gate, allowed to hold
+      one forward and nothing else (see `roost gate`).
+    quiet: true
+
+- name: Create roost's directory for the tunnel's key
+  ansible.builtin.file:
+    path: "{{ tunnel_key | dirname }}"
+    state: directory
+    owner: "{{ tunnel_user }}"
+    group: "{{ tunnel_user }}"
+    mode: "0700"
+
+# A key of roost's own, generated on the stand and never leaving it. The public
+# half is what `roost gate` prints for the gate's authorized_keys, restricted
+# there to a single forward — so this key cannot be used to log in even if it is
+# taken.
+- name: Create the tunnel's key
+  ansible.builtin.command:
+    cmd: ssh-keygen -t ed25519 -N '' -C 'roost tunnel from {{ inventory_hostname }}' -f {{ tunnel_key }}
+    creates: "{{ tunnel_key }}"
+  become: true
+  become_user: "{{ tunnel_user }}"
+  notify: Restart the tunnel
+
+- name: Keep the key readable by nobody else
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ tunnel_user }}"
+    group: "{{ tunnel_user }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ tunnel_key }}", mode: "0600" }
+    - { path: "{{ tunnel_key }}.pub", mode: "0644" }
+
+- name: Install the tunnel unit
+  ansible.builtin.template:
+    src: roost-tunnel.service.j2
+    dest: "{{ tunnel_unit }}"
+    mode: "0644"
+  notify: Restart the tunnel
+
+- name: Record what roost put here
+  ansible.builtin.template:
+    src: tunnel.env.j2
+    dest: "{{ tunnel_state_file }}"
+    mode: "0644"
+
+- name: Enable the tunnel
+  ansible.builtin.systemd:
+    name: roost-tunnel
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Flush handlers so what is checked below is what is running
+  ansible.builtin.meta: flush_handlers
+
+# Whether it is up is a question about the gate, and the gate may not be
+# configured yet — the operator has to add the key there first. So this reports
+# rather than fails: an install that stopped here would be an install that cannot
+# be run before the gate exists, and the printed instructions come from a
+# successful run.
+# The module rather than `systemctl is-active`, which ansible-lint is right about:
+# what is wanted here is the unit's state, and the module reports it without
+# pretending a query is a change.
+- name: Ask whether the tunnel is holding
+  ansible.builtin.systemd:
+    name: roost-tunnel
+  register: tunnel_active
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Say what to do about the gate
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'The tunnel is up.'
+         if (tunnel_active.status.ActiveState | default('')) == 'active'
+         else 'The tunnel is not holding yet — the gate has to accept this key first.' }}
+      Run `roost gate` to print what to add on {{ tunnel_gate }}: the
+      authorized_keys line for this stand and the nginx file that serves the
+      terminal through the forward.
+  when: not ansible_check_mode

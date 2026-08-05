@@ -1,0 +1,43 @@
+# {{ ansible_managed }}
+#
+# The stand's half of the way in: one reverse forward, held open.
+[Unit]
+Description=roost — reverse tunnel to {{ tunnel_gate }} for the web terminal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# As the account whose terminal this is, not as root: the only thing this needs
+# is to read one key and open one socket.
+User={{ tunnel_user }}
+Group={{ tunnel_user }}
+Restart=always
+RestartSec=5
+
+# -N: no command, this is a tunnel.
+# ExitOnForwardFailure: without it ssh stays connected while the forward is
+#   refused — the tunnel looks up and the terminal is unreachable, which is the
+#   failure that wastes an evening. With it, the unit dies and restarts, and the
+#   journal says why.
+# ServerAliveInterval/CountMax: a forward through a dropped connection is a
+#   socket the gate still offers and nothing answers. {{ tunnel_keepalive_interval * tunnel_keepalive_count }}s
+#   is the worst case for noticing.
+# StrictHostKeyChecking=accept-new: the gate is named by the operator and its key
+#   is learned on first connection. `yes` would need a known_hosts nobody has
+#   written yet; `no` would accept a different gate later without saying so.
+ExecStart=/usr/bin/ssh -N \
+    -i {{ tunnel_key }} \
+    -o IdentitiesOnly=yes \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval={{ tunnel_keepalive_interval }} \
+    -o ServerAliveCountMax={{ tunnel_keepalive_count }} \
+    -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile={{ tunnel_key | dirname }}/known_hosts \
+{% if tunnel_gate_port %}
+    -p {{ tunnel_gate_port }} \
+{% endif %}
+    -R 127.0.0.1:{{ tunnel_remote_port }}:{{ tunnel_local }} \
+    {{ tunnel_gate_target }}
+
+[Install]
+WantedBy=multi-user.target

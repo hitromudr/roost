@@ -36,6 +36,7 @@
       loop:
         - /etc/roost/terminal.env
         - /etc/roost/expose.env
+        - /etc/roost/tunnel.env
 
     - name: Work out what has to be taken back out
       ansible.builtin.set_fact:
@@ -67,6 +68,9 @@
         roost_expose_webroot_owned: "{{ 'EXPOSE_WEBROOT_OWNED=true' in roost_state_text }}"
         roost_ca_dir: "{{ roost_state_text | regex_search('EXPOSE_CA_DIR=(\\S+)', '\\1') | default([''], true) | first }}"
         roost_enroll_dir: "{{ roost_state_text | regex_search('EXPOSE_ENROLL_DIR=(\\S+)', '\\1') | default([''], true) | first }}"
+        roost_tunnel_unit: "{{ roost_state_text | regex_search('TUNNEL_UNIT=(\\S+)', '\\1') | default([''], true) | first }}"
+        roost_tunnel_key: "{{ roost_state_text | regex_search('TUNNEL_KEY=(\\S+)', '\\1') | default([''], true) | first }}"
+        roost_tunnel_gate: "{{ roost_state_text | regex_search('TUNNEL_GATE=(\\S+)', '\\1') | default([''], true) | first }}"
 
     # pockterm's own installer removes the unit and the binary it wrote. Using
     # it rather than deleting files by hand keeps one owner for those files
@@ -118,6 +122,46 @@
     # is right — the terminal it let them into is being removed in the same
     # breath. Keeping the key "in case" would leave the one file on the machine
     # that can mint a way into a service that no longer exists.
+    # The tunnel goes first among the outward-facing pieces: a forward left open
+    # to a gate whose vhost is about to stop working is a socket offering
+    # nothing, and the gate has no way to know.
+    - name: Stop the tunnel
+      ansible.builtin.systemd:
+        name: roost-tunnel
+        state: stopped
+        enabled: false
+      failed_when: false
+      when:
+        - roost_tunnel_unit | length > 0
+        - not ansible_check_mode
+
+    - name: Remove the tunnel's unit and its key
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ roost_tunnel_unit }}"
+        - "{{ roost_tunnel_key }}"
+        - "{{ roost_tunnel_key }}.pub"
+        - "{{ roost_tunnel_key | dirname }}/known_hosts"
+      when: roost_tunnel_unit | length > 0
+      loop_control:
+        label: "{{ item | basename }}"
+
+    # What roost cannot reach it says. The gate is somebody else's machine: the
+    # key line and the vhost there are named after roost and removable by name,
+    # but not from here.
+    - name: Say what the gate still holds
+      ansible.builtin.debug:
+        msg: >-
+          The gate {{ roost_tunnel_gate }} still has roost's line in
+          roost-tunnel's authorized_keys and
+          /etc/nginx/conf.d/roost-terminal.conf. Remove them there:
+          sudo rm /etc/nginx/conf.d/roost-terminal.conf && sudo nginx -t &&
+          sudo systemctl reload nginx — and drop the key line from
+          ~roost-tunnel/.ssh/authorized_keys.
+      when: roost_tunnel_gate | length > 0
+
     - name: Remove the certificate authority roost created
       ansible.builtin.file:
         path: "{{ roost_ca_dir }}"

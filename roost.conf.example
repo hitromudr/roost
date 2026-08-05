@@ -73,6 +73,29 @@ tls_port=8443
 # no mail when a certificate is about to expire.
 email=
 
+# --- being reached at all, when this machine has no address -------------
+# A stand behind NAT has nowhere for a phone to connect to. `gate` names
+# somewhere that does — a VPS, a machine at work, anything with a routable
+# address and an sshd:
+#
+#   gate=roost-tunnel@vps.example
+#
+# roost then holds one reverse forward open from here to there (a key of its own,
+# a systemd unit, `roost tunnel`), and `roost gate` prints what the far end
+# needs: an authorized_keys line permitting exactly that one forward, an sshd
+# drop-in allowing it, and an nginx file serving the terminal through it. That
+# half is printed rather than applied, because the gate is somebody else's
+# machine — `roost gate --apply` will do it over your own ssh access if you ask.
+#
+# With a gate set, the certificate lives on the gate: it is the machine that can
+# prove the name. `public_host` then points at the gate, and nothing is served
+# from here.
+#
+# Empty means this machine is reachable directly, and `roost expose` serves the
+# terminal from it.
+gate=
+gate_port=18130
+
 # --- the lock on the door ----------------------------------------------
 # token  the shared token pockterm puts in the URL your phone saves. What makes
 #        the first run one command — and a credential that lives in browser

@@ -8,6 +8,7 @@
 #   roost terminal  put a web terminal on this machine (only if there is none)
 #   roost expose    serve that terminal over TLS, and say at what address
 #   roost enroll    let one device in, when the lock is client certificates
+#   roost gate      what a machine with no address needs on the far end
 #   roost qr        print the QR code your phone opens
 #   roost doctor    check that the sandbox is what it claims to be
 #   roost projects [--list]         check out the repositories in projects.conf
@@ -29,6 +30,7 @@ PROXY_ENV="${ROOST_PROXY_ENV:-/etc/roost/agent-proxy.env}"
 AGENT_STATE="${ROOST_AGENT_STATE:-/etc/roost/agent.env}"
 AGENT_RUN_ENV="${ROOST_AGENT_RUN_ENV:-/etc/roost/agent-run.env}"
 TERMINAL_STATE="${ROOST_TERMINAL_STATE:-/etc/roost/terminal.env}"
+TUNNEL_STATE="${ROOST_TUNNEL_STATE:-/etc/roost/tunnel.env}"
 EXPOSE_STATE="${ROOST_EXPOSE_STATE:-/etc/roost/expose.env}"
 TERMINAL_ENV="${ROOST_TERMINAL_ENV:-/etc/pockterm/pockterm.env}"
 # The terminal draws its own QR code, so roost does not carry one. Named as a
@@ -48,7 +50,7 @@ bad()  { printf '\033[1;31m  ✗\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[roost]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
-	sed -n '2,14p' "$ROOT/roost" | sed 's/^# \{0,1\}//'
+	sed -n '2,15p' "$ROOT/roost" | sed 's/^# \{0,1\}//'
 }
 
 # --- configuration ------------------------------------------------------
@@ -94,6 +96,12 @@ set_defaults() {
 	#        is 4.4KB against a QR code's 2953, so the code carries a one-time
 	#        link to it and the import password is typed once. `roost enroll`.
 	client_auth=token
+	# Where to be reached through, for a machine that has no address of its own:
+	# user@host, or user@host:port. Empty means this machine is reachable
+	# directly and `roost expose` serves the terminal here.
+	gate=""
+	# The port the forward listens on, on the gate's loopback.
+	gate_port=18130
 }
 
 load_conf() {
@@ -372,6 +380,265 @@ cmd_terminal() {
 	ok "the terminal answers on $listen"
 }
 
+# cmd_tunnel is the stand's half of being reachable from somewhere else: a key of
+# roost's own and a unit holding one reverse forward open. The gate's half is
+# cmd_gate, which prints it.
+cmd_tunnel() {
+	load_conf
+	[ -n "$gate" ] || die "no gate in $CONF — a machine with a public address does not need one, and one without needs 'gate=user@host'"
+	log "opening a way in through $gate"
+	run_playbook stand.yml --tags tunnel \
+		-e "tunnel_user=$(id -un)" \
+		-e "tunnel_gate=$gate" \
+		-e "tunnel_remote_port=$gate_port" \
+		-e "tunnel_local=$listen"
+	log "next: roost gate — what to add on $gate"
+}
+
+# cmd_gate prints what the far end needs, and can put it there.
+#
+# Printing is the default and not a fallback. The gate is somebody else's
+# machine: roost has no state file on it, cannot know what else its nginx serves,
+# and must not be the thing that reloads it by surprise. What --apply does is
+# narrow on purpose — two files named after roost and one line in the tunnel
+# account's authorized_keys — and it refuses if that account does not exist,
+# because creating accounts on another machine is the operator's decision.
+cmd_gate() {
+	load_conf
+	local apply="" assume_yes="" target=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--apply) apply=1 ;;
+			--yes | -y) assume_yes=1 ;;
+			*) die "unknown option $1 (expected --apply, --yes)" ;;
+		esac
+		shift
+	done
+
+	local pubkey port host_name
+	pubkey="$(read_state TUNNEL_PUBKEY "$TUNNEL_STATE")"
+	port="$(read_state TUNNEL_REMOTE_PORT "$TUNNEL_STATE")"
+	[ -n "$pubkey" ] || die "no tunnel on this machine yet — run 'roost tunnel' first"
+	[ -n "$port" ] || port="$gate_port"
+	target="$(read_state TUNNEL_GATE "$TUNNEL_STATE")"
+	[ -n "$target" ] || target="$gate"
+	host_name="${public_host:-<the name that points at the gate>}"
+
+	local key_line vhost
+	# `restrict` turns everything off — no shell, no agent forwarding, no pty —
+	# and then one permission is turned back on: this forward, on loopback, and
+	# no other. A key that can only do that is a key worth having on a machine
+	# you do not own.
+	key_line="restrict,port-forwarding,permitlisten=\"127.0.0.1:$port\" $(cat "$pubkey" 2>/dev/null || sudo cat "$pubkey" 2>/dev/null || echo '<the stand key: cat '"$pubkey"'>')"
+
+	vhost="$(gate_vhost "$host_name" "$port")"
+
+	cat <<EOF
+
+The gate's half. Three files and one line, all named after roost so they can be
+taken back out by name — and nothing else on that machine is touched.
+
+1. An account for the tunnel and nothing else, if it is not there yet:
+
+     sudo useradd -m -s /usr/sbin/nologin roost-tunnel
+
+   A shell is not needed: the key below cannot ask for one.
+
+2. Its authorized_keys — one line, one permitted forward:
+
+$key_line
+
+3. /etc/ssh/sshd_config.d/roost-tunnel.conf, so that forward is allowed at all:
+
+$(gate_sshd_snippet)
+
+   Said rather than assumed: the default is usually to allow forwarding, and a
+   hardened sshd usually is not the default. A refused forward looks from the
+   stand like a tunnel that will not stay up, and from the gate like nothing at
+   all — this file is the difference. Reload sshd after adding it
+   (\`sudo systemctl reload ssh\` or \`sshd\`, depending on the distribution);
+   existing sessions are unaffected.
+
+4. /etc/nginx/conf.d/roost-terminal.conf on the gate:
+
+$vhost
+
+5. A certificate for $host_name, on the gate (it has the address, so it is the
+   one that can prove the name):
+
+     sudo certbot certonly --webroot -w /var/www/html -d $host_name
+     sudo nginx -t && sudo systemctl reload nginx
+EOF
+
+	if [ "$client_auth" = mtls ]; then
+		cat <<EOF
+
+6. The lock is client certificates, and the front asking for them is now the
+   gate's nginx — so it needs this stand's authority certificate:
+
+     scp $(read_state EXPOSE_CA_DIR "$EXPOSE_STATE" 2>/dev/null || echo /etc/roost/ca)/ca.crt \
+         $(read_state EXPOSE_CA_DIR "$EXPOSE_STATE" 2>/dev/null || echo /etc/roost/ca)/ca.crl \
+         ${target%%:*}:/tmp/ && \
+       ssh ${target%%:*} 'sudo install -D -m644 /tmp/ca.crt /etc/roost/ca/ca.crt && sudo install -m644 /tmp/ca.crl /etc/roost/ca/ca.crl'
+
+   And the revocation list has to travel again every time a device is revoked —
+   a list the front never re-reads is a lock that never lets go.
+EOF
+	fi
+
+	echo
+	if [ -z "$apply" ]; then
+		log "nothing was changed on $target — add the above, or re-run: roost gate --apply"
+		return 0
+	fi
+
+	[ -n "$target" ] || die "no gate to apply to"
+	if [ -z "$assume_yes" ]; then
+		cat <<EOF
+--apply will, on $target, over your own ssh access:
+  · append that one line to roost-tunnel's authorized_keys (refusing if the
+    account is not there)
+  · write /etc/ssh/sshd_config.d/roost-tunnel.conf and reload sshd
+  · write /etc/nginx/conf.d/roost-terminal.conf
+  · run nginx -t, and reload nginx only if it passes
+
+It will not create the account, obtain the certificate, or touch any other file.
+
+EOF
+		local reply
+		read -rp "Proceed? [y/N] " reply
+		case "$reply" in y | Y | yes) ;; *) die "cancelled" ;; esac
+	fi
+	gate_apply "$target" "$key_line" "$vhost"
+}
+
+# gate_sshd_snippet is the one sshd setting the forward depends on, scoped to the
+# tunnel's account. A hardened sshd — which is what a machine worth using as a
+# gate usually has — refuses port forwarding outright, and then the stand's unit
+# restarts forever against a gate that says no.
+gate_sshd_snippet() {
+	cat <<'EOF'
+# Written for the gate by 'roost gate'. Removable by name.
+Match User roost-tunnel
+    AllowTcpForwarding yes
+    PermitTTY no
+    X11Forwarding no
+    AllowAgentForwarding no
+    PermitTunnel no
+EOF
+}
+
+# gate_vhost prints the gate's nginx file: the same rules as the local front,
+# proxying into the far end of the forward instead of into a local port.
+#
+# The optional pieces are built into variables first rather than substituted
+# inside the heredoc: nginx configuration is full of $variables that must not be
+# expanded by the shell, and mixing the two kinds of dollar in one place is how
+# that goes wrong quietly.
+gate_vhost() {
+	local name="$1" port="$2" verify="" guard=""
+	if [ "$client_auth" = mtls ]; then
+		verify=$'\n    ssl_client_certificate /etc/roost/ca/ca.crt;\n    ssl_crl                /etc/roost/ca/ca.crl;\n    ssl_verify_client      optional;\n    ssl_verify_depth       2;'
+		guard=$'        if ($ssl_client_verify != SUCCESS) {\n            return 403 "This terminal wants a client certificate. Run \'roost enroll <device>\' on the stand.\\n";\n        }\n'
+	fi
+	cat <<EOF
+# Written for the gate by 'roost gate'. Removable by name.
+map \$http_upgrade \$roost_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name $name;
+
+    ssl_certificate     /etc/letsencrypt/live/$name/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$name/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;$verify
+
+    add_header X-Robots-Tag "noindex, nofollow" always;
+    add_header X-Frame-Options "DENY" always;
+    client_max_body_size 25m;
+
+    location / {
+$guard        # The far end of the stand's reverse forward. Loopback: the forward is
+        # bound there, and a gate that offered this port to the internet would
+        # be offering the terminal with no lock in front of it.
+        proxy_pass http://127.0.0.1:$port;
+
+        # \$http_host and not \$host: the terminal refuses a WebSocket upgrade
+        # whose Origin and Host disagree, and only \$http_host keeps a port.
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$roost_connection_upgrade;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+}
+EOF
+}
+
+# gate_apply does the narrow version of the printed instructions, over ssh.
+#
+# One script, written here and fed to the far end on stdin, rather than a series
+# of remote command lines: the quoting is then written once and read once, and
+# what runs there is something a person can print and look at. It refuses if the
+# account is missing — creating accounts on a machine roost does not own is the
+# operator's decision, not a side effect of this command.
+gate_apply() {
+	local target="${1%%:*}" key_line="$2" vhost="$3"
+	local ssh_port=""
+	case "$1" in *:*) ssh_port="-p ${1##*:}" ;; esac
+
+	local script; script="${TMPDIR:-/tmp}/roost-gate.$$"
+	cat > "$script" <<REMOTE
+set -euo pipefail
+account=roost-tunnel
+if ! id "\$account" >/dev/null 2>&1; then
+	echo "there is no \$account here — create it first: sudo useradd -m -s /usr/sbin/nologin \$account" >&2
+	exit 1
+fi
+home="\$(getent passwd "\$account" | cut -d: -f6)"
+install -d -m700 -o "\$account" -g "\$account" "\$home/.ssh"
+touch "\$home/.ssh/authorized_keys"
+line='$key_line'
+if ! grep -qxF "\$line" "\$home/.ssh/authorized_keys"; then
+	printf '%s\n' "\$line" >> "\$home/.ssh/authorized_keys"
+fi
+chown -R "\$account:\$account" "\$home/.ssh"
+chmod 600 "\$home/.ssh/authorized_keys"
+install -d -m755 /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/roost-tunnel.conf <<'SSHD'
+$(gate_sshd_snippet)
+SSHD
+# Whichever the unit is called here. Reloaded rather than restarted: a restart
+# would drop the very session doing this.
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+cat > /etc/nginx/conf.d/roost-terminal.conf <<'VHOST'
+$vhost
+VHOST
+nginx -t
+systemctl reload nginx
+REMOTE
+
+	log "applying it on $target"
+	# shellcheck disable=SC2086 # ssh_port is ours, and empty when there is none
+	if ! ssh $ssh_port "$target" "sudo bash -s" < "$script"; then
+		rm -f "$script"
+		die "the gate refused it — nothing was reloaded there. The script that ran is what 'roost gate' prints."
+	fi
+	rm -f "$script"
+	ok "the gate holds the key and serves the terminal"
+	log "if the certificate is not there yet: sudo certbot certonly --webroot -w /var/www/html -d ${public_host:-<your name>}"
+}
+
 cmd_expose() {
 	load_conf
 	local assume_yes="" front=auto
@@ -514,7 +781,16 @@ cmd_up() {
 	cmd_agent
 	cmd_install
 	cmd_terminal
-	cmd_expose ${assume_yes:+--yes}
+	if [ -n "$gate" ]; then
+		# A machine with no address of its own: the terminal stays on loopback
+		# here and is reached through the gate, whose nginx is the front. There
+		# is nothing for `expose` to do on this machine — and the certificate
+		# belongs where the address is.
+		cmd_tunnel
+		cmd_gate
+	else
+		cmd_expose ${assume_yes:+--yes}
+	fi
 	cmd_doctor || warn "doctor found something — the lines above say what"
 	echo
 	if [ "$client_auth" = mtls ]; then
@@ -813,6 +1089,22 @@ cmd_doctor() {
 		fi
 	fi
 
+	# The way in, for a machine that has none of its own. A forward that is not
+	# holding is the whole reason the terminal is unreachable, and it is invisible
+	# from the phone's end: the gate answers, and answers nothing.
+	local t_gate; t_gate="$(read_state TUNNEL_GATE "$TUNNEL_STATE")"
+	if [ -n "$t_gate" ]; then
+		if systemctl is-active --quiet roost-tunnel 2>/dev/null; then
+			ok "the tunnel to $t_gate is up"
+		else
+			bad "the tunnel to $t_gate is not up — nothing reaches this terminal"
+			echo "      fix: systemctl status roost-tunnel; journalctl -u roost-tunnel -n 20"
+			echo "           a refused forward usually means the gate has not got"
+			echo "           this stand's key yet: roost gate"
+			failed=1
+		fi
+	fi
+
 	local url lock; url="$(read_state EXPOSE_URL "$EXPOSE_STATE")"
 	lock="$(read_state EXPOSE_CLIENT_AUTH "$EXPOSE_STATE")"
 	if [ -n "$url" ] && command -v curl >/dev/null; then
@@ -899,6 +1191,8 @@ case "${1:-help}" in
 	terminal)  shift; cmd_terminal "$@" ;;
 	expose)    shift; cmd_expose "$@" ;;
 	enroll)    shift; cmd_enroll "$@" ;;
+	tunnel)    shift; cmd_tunnel "$@" ;;
+	gate)      shift; cmd_gate "$@" ;;
 	qr)        shift; cmd_qr "$@" ;;
 	projects)  shift; cmd_projects "$@" ;;
 	uninstall) shift; cmd_uninstall "$@" ;;

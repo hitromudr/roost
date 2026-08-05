@@ -78,6 +78,39 @@ lives in the URL your phone saves, which means it also lives in browser history
 and in the logs of whatever sits in front. For something you keep there is a
 second lock, below.
 
+### A machine with no address: a gate
+
+A single-board computer at home, a laptop at the office, a mini PC behind NAT —
+none of them has an address a phone can arrive at. What is needed then is a second
+machine that does, and `gate=` in `roost.conf` says which:
+
+```
+gate=roost-tunnel@vps.example
+```
+
+`./roost tunnel` sets up a key of roost's own on the stand and a unit holding one
+reverse forward to the gate. `./roost gate` prints what has to be added **there**:
+
+- a line in `authorized_keys` permitting exactly that one forward and nothing else
+  (`restrict,port-forwarding,permitlisten="127.0.0.1:18130"` — no shell, no agent,
+  no second port);
+- `/etc/ssh/sshd_config.d/roost-tunnel.conf`, without which a hardened sshd simply
+  refuses the forward — which looks on the stand like a tunnel that will not stay
+  up, and on the gate like nothing at all;
+- `/etc/nginx/conf.d/roost-terminal.conf`, serving the terminal through that
+  forward, and the certbot command for the certificate: the gate has the address,
+  so the gate is what can prove the name.
+
+Printed rather than applied, because the gate is somebody else's machine: roost
+has no state file there, does not know what else that nginx serves, and must not
+be the thing that reloads it by surprise. `./roost gate --apply` will do it over
+your own ssh access if you ask — three files named after roost and one line, with
+the account left for its owner to create.
+
+Checked by a container test (`make test-integration`): the forward holds, the gate
+reaches the terminal on the stand, and the same key can get neither a shell nor a
+second forward.
+
 ### The other lock: a certificate on the device
 
 `client_auth=mtls` in `roost.conf`, and the door asks for a client certificate

@@ -10,5 +10,6 @@ test: ## Run bats tests
 test-integration: ## Apply the roles in a throwaway container and check them (needs docker)
 	bash tests/integration/egress_container.sh
 	bash tests/integration/mtls_container.sh
+	bash tests/integration/tunnel_container.sh
 
 check: lint test ## Lint and test

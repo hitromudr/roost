@@ -1,0 +1,9 @@
+---
+# Restarting drops the forward, and with it whatever terminal is open through it
+# — so only when the unit or the key actually changed.
+- name: Restart the tunnel
+  ansible.builtin.systemd:
+    name: roost-tunnel
+    state: restarted
+    daemon_reload: true
+  when: not ansible_check_mode

@@ -630,3 +630,126 @@ CONF
     run "$ROOST" doctor
     [[ "$output" == *"still published"* ]]
 }
+
+# --- a way in for a machine that has no address --------------------------
+# The stand's half is a unit and a key (the tunnel role). The gate's half is
+# printed, because it is somebody else's machine — so what these cover is what
+# gets printed, and that nothing is applied unless it was asked for.
+
+gate_state() {
+    export ROOST_TUNNEL_STATE="$BATS_TEST_TMPDIR/tunnel.env"
+    printf '%s\n' \
+        "TUNNEL_GATE=roost-tunnel@gate.example" \
+        "TUNNEL_REMOTE_PORT=18130" \
+        "TUNNEL_KEY=$BATS_TEST_TMPDIR/id" \
+        "TUNNEL_PUBKEY=$BATS_TEST_TMPDIR/id.pub" \
+        "TUNNEL_UNIT=/etc/systemd/system/roost-tunnel.service" \
+        > "$ROOST_TUNNEL_STATE"
+    printf 'ssh-ed25519 AAAAKEY roost tunnel\n' > "$BATS_TEST_TMPDIR/id.pub"
+}
+
+@test "the tunnel is refused when no gate is named" {
+    write_conf
+    run "$ROOST" tunnel
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"gate=user@host"* ]]
+}
+
+@test "the tunnel forwards the terminal's own port to the gate" {
+    write_conf
+    printf 'gate=roost-tunnel@gate.example\ngate_port=19999\nlisten=127.0.0.1:8130\n' >> "$ROOST_CONF"
+    run "$ROOST" tunnel
+    [ "$status" -eq 0 ]
+    grep -q -- "--tags tunnel" "$STUB_LOG"
+    grep -q "tunnel_gate=roost-tunnel@gate.example" "$STUB_LOG"
+    grep -q "tunnel_remote_port=19999" "$STUB_LOG"
+    grep -q "tunnel_local=127.0.0.1:8130" "$STUB_LOG"
+}
+
+@test "the gate is told to permit exactly one forward" {
+    write_conf
+    printf 'gate=roost-tunnel@gate.example\npublic_host=terminal.example\n' >> "$ROOST_CONF"
+    gate_state
+    run "$ROOST" gate
+    [ "$status" -eq 0 ]
+    # `restrict` first: no shell, no pty, no agent — and then one forward back on.
+    [[ "$output" == *'restrict,port-forwarding,permitlisten="127.0.0.1:18130"'* ]]
+    [[ "$output" == *"AAAAKEY"* ]]
+}
+
+@test "the gate's vhost proxies into the forward's own end, on loopback" {
+    write_conf
+    printf 'gate=roost-tunnel@gate.example\npublic_host=terminal.example\n' >> "$ROOST_CONF"
+    gate_state
+    run "$ROOST" gate
+    [[ "$output" == *"proxy_pass http://127.0.0.1:18130;"* ]]
+    [[ "$output" == *"server_name terminal.example;"* ]]
+    # The header the terminal's Origin check depends on.
+    [[ "$output" == *'proxy_set_header Host $http_host;'* ]]
+    [[ "$output" != *'proxy_set_header Host $host;'* ]]
+    # nginx's own variables must survive the shell, not be expanded by it.
+    [[ "$output" == *'map $http_upgrade $roost_connection_upgrade'* ]]
+}
+
+@test "printing changes nothing on the gate" {
+    write_conf
+    printf 'gate=roost-tunnel@gate.example\n' >> "$ROOST_CONF"
+    gate_state
+    run "$ROOST" gate
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nothing was changed"* ]]
+    ! grep -q "ssh " "$STUB_LOG" 2>/dev/null || true
+}
+
+@test "the certificate lock reaches the gate's vhost too, with the authority to copy" {
+    write_conf
+    printf 'gate=roost-tunnel@gate.example\npublic_host=terminal.example\nclient_auth=mtls\n' >> "$ROOST_CONF"
+    gate_state
+    run "$ROOST" gate
+    [[ "$output" == *"ssl_verify_client      optional;"* ]]
+    [[ "$output" == *"ssl_crl"* ]]
+    # The front asking for certificates is the gate's nginx now, so the authority
+    # has to be there — and the revocation list has to travel again on each
+    # revocation, which is the part that is easy to forget.
+    [[ "$output" == *"ca.crl"* ]]
+    [[ "$output" == *"revoked"* ]]
+}
+
+@test "the gate cannot be described before the stand has a tunnel" {
+    write_conf
+    printf 'gate=roost-tunnel@gate.example\n' >> "$ROOST_CONF"
+    export ROOST_TUNNEL_STATE="$BATS_TEST_TMPDIR/absent.env"
+    run "$ROOST" gate
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"roost tunnel"* ]]
+}
+
+@test "an unknown gate option is refused" {
+    write_conf
+    printf 'gate=roost-tunnel@gate.example\n' >> "$ROOST_CONF"
+    gate_state
+    run "$ROOST" gate --sideways
+    [ "$status" -ne 0 ]
+}
+
+@test "doctor calls out a tunnel that is not holding" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=/usr/bin/true
+CONF
+    gate_state
+    STUB_RC=1 run "$ROOST" doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"is not up"* ]]
+    [[ "$output" == *"roost gate"* ]]
+}
+
+@test "doctor is satisfied when it is" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=/usr/bin/true
+CONF
+    gate_state
+    run "$ROOST" doctor
+    [[ "$output" == *"the tunnel to roost-tunnel@gate.example is up"* ]]
+}

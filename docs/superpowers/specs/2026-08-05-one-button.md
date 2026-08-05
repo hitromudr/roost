@@ -116,10 +116,22 @@ the start: treat this access as SSH.
 
 ## What is deliberately not in it
 
-- **A gate.** A machine behind NAT still needs somewhere with a routable
-  address, and that is the shape the old `gate` role had. Out until the
-  single-machine path is proven; the design of it survives in the 2026-08-02
-  spec.
+- ~~**A gate.**~~ Written later the same day, once the single-machine path was
+  proven. The shape the old `gate` role had is the shape it still needs — a
+  reverse forward to something with a routable address — but the ownership rule
+  decides how far it goes: the stand's half is a role (`tunnel`: roost's own key,
+  roost's own unit), and the gate's half is *printed* by `roost gate`, because a
+  gate is somebody else's machine. `--apply` exists and is narrow on purpose:
+  three files named after roost and one line in one account's authorized_keys,
+  over the operator's own ssh, refusing to create the account.
+
+  Two things that only a real forward teaches, and both are in the printed
+  instructions because of it. The key line has to be `restrict` plus
+  `port-forwarding` plus `permitlisten` — a key that can do exactly one thing is
+  worth having on a machine you do not own. And a hardened sshd refuses port
+  forwarding outright, which on the stand looks like a tunnel that will not stay
+  up and on the gate looks like nothing at all, so the sshd drop-in is part of the
+  recipe rather than an assumption about defaults.
 - **An APK.** The owner's phone runs an Android client with the address
   compiled in; parameterising, publishing and signing it is a project of its
   own. The PWA installs from the QR link on any phone, which is what "one

@@ -1,0 +1,41 @@
+---
+# A way in for a machine with no way in: the stand holds a reverse forward open
+# to somewhere that has a routable address, and the terminal is reached through
+# that.
+#
+# This role is the stand's half, and the stand's half only — a key, a unit, and
+# the state file that says what to remove. The gate's half is `roost gate`, which
+# prints what to add there: an authorized_keys line and an nginx file. Anything
+# roost cannot own it prints, and a machine somebody else runs is the clearest
+# case of that there is.
+#
+# Why a plain ssh under systemd rather than autossh: `Restart=always` with
+# `ServerAliveInterval` does the same job, and the machines this has to work on
+# are whatever their owners have. One less package to require.
+
+tunnel_user: "{{ ansible_user_id }}"
+
+# The gate: where the forward goes. `user@host` or `user@host:port`.
+tunnel_gate: ""
+
+# The port the forward listens on, on the gate's loopback. Not on its wildcard
+# address: the gate's own nginx is what terminates TLS and asks for whatever the
+# lock is, and a forward bound to 0.0.0.0 there would offer the terminal to the
+# internet with no lock at all.
+tunnel_remote_port: 18130
+
+# What is being forwarded — the terminal, on this machine's loopback.
+tunnel_local: 127.0.0.1:8130
+
+# roost's own key for this, and nothing else. A key of its own rather than the
+# operator's: this one is restricted on the gate to a single forward, and it can
+# be replaced without touching how anybody logs in.
+tunnel_key: /etc/roost/tunnel/id_ed25519
+tunnel_unit: /etc/systemd/system/roost-tunnel.service
+tunnel_state_file: /etc/roost/tunnel.env
+
+# How quickly a dead connection is noticed. A phone's terminal reconnects when
+# the tunnel does, so this is the worst case for "the page is not loading" after
+# the stand's network flapped.
+tunnel_keepalive_interval: 30
+tunnel_keepalive_count: 3

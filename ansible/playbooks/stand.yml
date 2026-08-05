@@ -31,3 +31,10 @@
       tags: [terminal]
     - role: expose
       tags: [expose]
+    # Only for a machine with no address of its own, which is why it is last and
+    # why nothing runs it unless `gate=` says where to be reached through. The
+    # gate's own half is printed by `roost gate` rather than applied from here:
+    # it is somebody else's machine.
+    - role: tunnel
+      tags: [tunnel]
+      when: tunnel_gate | default('') | length > 0

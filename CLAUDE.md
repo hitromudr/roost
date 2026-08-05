@@ -116,6 +116,12 @@ Ansible roles:
   and the bundle travels as a one-time link rather than inside the QR code,
   because it is 4.4KB against a code's 2953-byte ceiling — measured, and
   `tests/ca.bats` fails if that ever stops being true.
+- `tunnel` (stand, only with `gate=`) — the stand's half of being reachable from
+  somewhere else: a key of roost's own and a unit holding one reverse forward. The
+  gate's half is printed by `roost gate` — an authorized_keys line, an sshd
+  drop-in and an nginx file, all named after roost — because a gate is somebody
+  else's machine. `--apply` will install exactly those over the operator's own ssh
+  and nothing more; it refuses to create the account.
 - `agent_sessions` (stand) — tmux sessions per project, named `roost-<project>`.
 - `projects` (any machine) — brings the machine it runs on up to the
   repository list in `projects.conf`. The list says what should be checked
@@ -136,7 +142,7 @@ ships.
 throwaway directories — no docker, no root, skipped where ansible is absent
 (CI installs ansible-lint, not ansible).
 
-`make test-integration` runs two container suites. `egress_container.sh` proves
+`make test-integration` runs three container suites. `egress_container.sh` proves
 the egress policy: direct egress rejected for the group, the local proxy still
 reachable, processes outside the group unaffected, re-applying changes nothing,
 and no rules left in either address family after `clear`. `mtls_container.sh`
@@ -146,9 +152,25 @@ this authority signed gets in, somebody else's does not, the enrolment path stay
 open to a device with none, the enrolment directory does not list itself, and a
 revoked certificate stops working while the others keep working.
 
-Both need docker — which the RPi5 has, and which works from inside the agent
+`tunnel_container.sh` proves the way in for a machine with no address: a container
+stands in for the gate, this machine for the stand, and what is asserted is that
+the forward holds, that the gate reaches a service on this machine through it, and
+that the same key can get neither a shell nor a second forward.
+
+All three need docker — which the RPi5 has, and which works from inside the agent
 sandbox, so **run them there rather than assuming they cannot be run**. First run
-on 2026-08-05: eight checks and eleven.
+on 2026-08-05: eight checks, eleven and six.
+
+Three traps the tunnel suite walked into, all of them about the test and not the
+tunnel, and all worth knowing before writing another one like it: a published
+docker port accepts connections from the moment the container starts, whether or
+not anything inside is listening, so a readiness probe against it succeeds against
+nothing and the failure arrives later as "Connection reset by peer" at the ssh
+banner — wait for the container's log instead. Alpine's `adduser` leaves the
+account locked, and sshd refuses a locked account before it looks at any key.
+And a single-quoted script passed to `docker run` cannot contain single quotes: the
+first inner one ended the string, and a `sed` meant for the container ran against
+this machine's /etc/shadow. Setup scripts go in files.
 
 Two things the second suite taught, both about status codes rather than about the
 lock. nginx answers a certificate it cannot verify with **400** of its own,
