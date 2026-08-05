@@ -11,7 +11,9 @@
 # pinned   loopback only. The agent reaches the internet through a local proxy
 #          that is itself outside the sandbox, so its exit address stays the
 #          same wherever the machine is.
-# proxied  the same, plus destinations you name in the role's _allow list.
+# proxied  the same, plus the destinations in `egress_sandbox_allow` — an
+#          ansible variable of the role, not a key of this file: the list is
+#          usually a property of the network, not of the machine.
 # direct   no restrictions. Here so that "unrestricted" is a choice somebody
 #          made rather than the result of skipping configuration.
 egress_profile=pinned
@@ -41,6 +43,11 @@ exit_probe=https://ifconfig.me
 # The binary a session starts. Leave it empty to have roost install Claude
 # Code (`roost agent`) and record the path it chose back into this file.
 agent_command=
+
+# Whether roost may install that binary at all. false leaves it to you: the
+# sandbox, the sessions and the terminal are set up around whatever agent is
+# already there, and `roost doctor` says so if there is none.
+agent_install=true
 
 # Further agents, name:command, comma-separated. Each gets a launcher of its
 # own — `codex` below installs /usr/local/bin/codex-safe — sharing the group,

@@ -882,8 +882,8 @@ cmd_up() {
 # projects.conf lists the repositories that belong on every machine you work
 # from, one per line:
 #
-#   isearch  https://git.example/isearch.git
-#   sorter   https://github.com/x/sorter.git  develop
+#   notes   https://git.example/you/notes.git
+#   webapp  https://github.com/example/webapp.git  develop
 #
 # It is a list of what should be present, not a handover from one machine to
 # another: this command brings the machine it runs on up to the list, and the
@@ -952,9 +952,14 @@ cmd_uninstall() {
 	# What goes depends on what roost put there, and the state files are the
 	# record of that. A machine whose terminal predates roost keeps it, and
 	# says so here rather than after the fact.
-	local had_terminal="" had_expose=""
+	# Everything the teardown playbook acts on is named here, or the preview
+	# understates what a confirmation is being asked for.
+	local had_terminal="" had_expose="" had_tunnel="" had_ca="" tunnel_gate=""
 	[ -z "$(read_state TERMINAL_UNIT "$TERMINAL_STATE")" ] || had_terminal=1
 	[ -z "$(read_state EXPOSE_VHOST "$EXPOSE_STATE")" ] || had_expose=1
+	[ -z "$(read_state TUNNEL_UNIT "$TUNNEL_STATE")" ] || had_tunnel=1
+	[ -z "$(read_state EXPOSE_CA_DIR "$EXPOSE_STATE")" ] || had_ca=1
+	tunnel_gate="$(read_state TUNNEL_GATE "$TUNNEL_STATE")"
 
 	cat <<EOF
 This removes from $(hostname):
@@ -963,12 +968,16 @@ This removes from $(hostname):
   · /etc/roost
 $( [ -n "$had_terminal" ] && echo "  · the web terminal roost installed, and its unit" )
 $( [ -n "$had_expose" ] && echo "  · roost's nginx file, followed by a reload" )
+$( [ -n "$had_tunnel" ] && echo "  · roost's own reverse tunnel${tunnel_gate:+ to $tunnel_gate}: its unit and its key" )
+$( [ -n "$had_ca" ] && echo "  · the certificate authority roost created, and the enrolment directory —" \
+        && echo "    the certificates already on devices stop being accepted anywhere" )
 
 It keeps:
   · your projects and any running tmux sessions
   · the agent binary, and whatever it is logged in as
 $( [ -n "$had_expose" ] && echo "  · the certificate (still valid; delete it with certbot if you want it gone)" )
-  · anything else on this machine — another terminal, a tunnel, your shell
+$( [ -n "$tunnel_gate" ] && echo "  · the gate's half — only its owner can remove that, and the run prints it" )
+  · anything else on this machine — a terminal roost did not install, your shell
   · $( [ -n "$purge" ] && echo "nothing else — --purge was given" \
         || echo "the sandbox group (use --purge to remove it)" )
 EOF

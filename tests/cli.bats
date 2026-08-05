@@ -131,8 +131,8 @@ EOF
 write_projects() {
     printf '%s\n' \
         '# name  repository  [branch]' \
-        'isearch  https://git.example/isearch.git' \
-        'sorter   https://github.com/x/sorter.git  develop' \
+        'notes   https://git.example/you/notes.git' \
+        'webapp  https://github.com/example/webapp.git  develop' \
         > "$BATS_TEST_TMPDIR/projects.conf"
     export ROOST_PROJECTS="$BATS_TEST_TMPDIR/projects.conf"
 }
@@ -142,8 +142,8 @@ write_projects() {
     write_projects
     run "$ROOST" projects --list
     [ "$status" -eq 0 ]
-    [[ "$output" == *'"name":"isearch"'* ]]
-    [[ "$output" == *'"repo":"https://git.example/isearch.git"'* ]]
+    [[ "$output" == *'"name":"notes"'* ]]
+    [[ "$output" == *'"repo":"https://git.example/you/notes.git"'* ]]
     [[ "$output" == *'"version":"develop"'* ]]
 }
 
@@ -151,7 +151,7 @@ write_projects() {
     write_conf
     write_projects
     run "$ROOST" projects --list
-    [[ "$output" == *'"name":"isearch","repo":"https://git.example/isearch.git","version":"HEAD"'* ]]
+    [[ "$output" == *'"name":"notes","repo":"https://git.example/you/notes.git","version":"HEAD"'* ]]
 }
 
 @test "comments and blank lines are ignored" {
@@ -195,7 +195,7 @@ write_projects() {
     run "$ROOST" projects
     [ "$status" -eq 0 ]
     grep -q "projects.yml" "$STUB_LOG"
-    grep -q "isearch" "$STUB_LOG"
+    grep -q "notes" "$STUB_LOG"
 }
 
 @test "the list reaches ansible as json, not as a string" {
