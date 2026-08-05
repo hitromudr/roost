@@ -97,6 +97,20 @@ disagree (see `CLAUDE.md`, "Scope"). The rule that already exists for machines
 `roost-session start` can enforce the useful part of this: refuse to start a
 second agent's session in a directory that already has one, and say why.
 
+**Settled 2026-08-05: the rule is stated, nothing enforces it yet.** The rule
+went into `dotfiles/claude/projects/work/common.md`, where the process rules for
+`~/work` live and from where both machines get them. Enforcement was declined
+for now because the cheap half does not cover the common case: `roost-session`
+would guard only the sessions it opens, while the sessions that actually collide
+are started from a phone through `~/work/Makefile` — a file owned by another
+repository's role. A guard in one of the two places would read as protection
+that is not there.
+
+One thing does *not* get enforcement for free either way: Codex reads
+`AGENTS.md` and does not understand the `@`-import that pulls `common.md` in, so
+until the split in section 3 exists the rule is visible to Claude and invisible
+to Codex.
+
 ### 3. Codex does not read `CLAUDE.md`
 
 It reads `AGENTS.md` walking up the directory tree, plus a global
@@ -181,10 +195,15 @@ the list is not rebuilt later; each belongs in its own repository's history.
    loosen is the traffic in the other direction, which is what
    `exante/CLAUDE.md` is about: no corporate secrets, no corporate checkouts and
    no run artefacts on this machine.
-3. **Sticky exit.** EMMET is the sticky-IP exit chosen for Anthropic. OpenAI
-   is no more relaxed about a moving address, and a corporate account may read
-   a Swiss exit as an anomaly. Either the same exit with the risk accepted, or
-   a separate one.
+3. **Sticky exit — settled 2026-08-05: the same exit, risk accepted.** Both
+   agents leave through EMMET. A separate exit for OpenAI would mean a second
+   sandbox group and a second rule set to keep in step, and the invariant that
+   matters — one account, one address — is not broken by sharing one. Revisit if
+   OpenAI asks for phone verification again or Anthropic objects to the address;
+   until then a second exit is work without a cause. The risk that was accepted
+   is named: one datacentre address in Switzerland carries both a personal and a
+   corporate account, and it already showed once — the first Codex login
+   demanded a phone precisely because of that address.
 
 ## Order of work
 
