@@ -61,11 +61,22 @@
         - /usr/sbin/nginx
         - /usr/bin/nginx
 
-    - name: Look for roost's own record of installing it
+    - name: Look for roost's own record of publishing this before
       ansible.builtin.slurp:
         src: "{{ expose_state_file }}"
       register: expose_state_raw
       failed_when: false
+
+    # What a previous run recorded. It is read rather than derived because the
+    # facts it holds are about the first run: whether roost installed nginx,
+    # and whether it created the challenge directory. A later run finds both
+    # already there and would otherwise conclude they were somebody else's —
+    # and then teardown would leave them behind.
+    - name: Remember what that record says
+      ansible.builtin.set_fact:
+        expose_prev_state: >-
+          {{ (expose_state_raw.content | b64decode)
+             if expose_state_raw.content is defined else '' }}
 
     - name: See what is listening on port 80
       ansible.builtin.command: ss -Htln
@@ -79,9 +90,7 @@
           {{ expose_listen.stdout_lines
              | select('search', ':80\\s')
              | list | length > 0 }}
-        expose_nginx_owned: >-
-          {{ 'EXPOSE_NGINX_OWNED=true' in
-             ((expose_state_raw.content | default('') | b64decode) if expose_state_raw.content is defined else '') }}
+        expose_nginx_owned: "{{ 'EXPOSE_NGINX_OWNED=true' in expose_prev_state }}"
 
     - name: Work out the mode
       ansible.builtin.set_fact:
@@ -149,11 +158,15 @@
               publish it through the front door you already have (expose_front=print).
             quiet: true
 
+        # Registered because teardown has to know whether this directory is
+        # roost's to remove: pointed at a webroot the machine already served
+        # from, deleting it on the way out would take somebody's site with it.
         - name: Create the challenge directory
           ansible.builtin.file:
             path: "{{ expose_webroot }}"
             state: directory
             mode: "0755"
+          register: expose_webroot_created
 
         - name: Look for a certificate
           ansible.builtin.stat:

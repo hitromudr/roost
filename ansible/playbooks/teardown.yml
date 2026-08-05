@@ -51,6 +51,20 @@
         roost_terminal_src: "{{ roost_state_text | regex_search('TERMINAL_SRC=(\\S+)', '\\1') | default([''], true) | first }}"
         roost_expose_vhost: "{{ roost_state_text | regex_search('EXPOSE_VHOST=(\\S+)', '\\1') | default([''], true) | first }}"
         roost_go_dir: "{{ roost_state_text | regex_search('TERMINAL_GO_DIR=(\\S+)', '\\1') | default([''], true) | first }}"
+        roost_expose_webroot: "{{ roost_state_text | regex_search('EXPOSE_WEBROOT=(\\S+)', '\\1') | default([''], true) | first }}"
+        # Whether that directory is roost's to remove at all — see
+        # EXPOSE_WEBROOT_OWNED in the expose role. A webroot the machine already
+        # served from is not.
+        #
+        # Kept as a separate fact rather than folded into the expression above,
+        # and this is worth knowing: written as a `>-` block, the same
+        # `regex_search('...(\\S+)', '\\1')` fails on ansible-core 2.14 with
+        # "AttributeError: 'NoneType' object has no attribute 'group'" — the
+        # backslashes reach jinja differently there than from a double-quoted
+        # scalar, the pattern stops matching, and the filter dereferences the
+        # miss. Measured on the target's own ansible; the one on this machine
+        # (2.19) accepts both, which is exactly why it was not caught here.
+        roost_expose_webroot_owned: "{{ 'EXPOSE_WEBROOT_OWNED=true' in roost_state_text }}"
 
     # pockterm's own installer removes the unit and the binary it wrote. Using
     # it rather than deleting files by hand keeps one owner for those files
@@ -96,6 +110,28 @@
         path: "{{ roost_terminal_src }}"
         state: absent
       when: roost_terminal_src | length > 0
+
+    - name: Remove the challenge directory roost created
+      ansible.builtin.file:
+        path: "{{ roost_expose_webroot }}"
+        state: absent
+      when:
+        - roost_expose_webroot | length > 0
+        - roost_expose_webroot_owned | bool
+
+    # rmdir rather than `state: absent`: the directory is roost's by name, but
+    # anything the operator has put inside it is not, and a failure to remove a
+    # non-empty directory is the right outcome. Both of these were found by the
+    # first teardown on a real machine, which left /opt/roost and the challenge
+    # directory behind — with roost's own name on them.
+    - name: Remove roost's directory under /opt, if nothing else is in it
+      ansible.builtin.command: rmdir /opt/roost
+      args:
+        removes: /opt/roost
+      register: roost_opt_removed
+      changed_when: roost_opt_removed.rc == 0
+      failed_when: false
+      when: not ansible_check_mode
 
     # `systemd`, not `systemd_service`: the newer name needs ansible-core
     # 2.16, and a stand may well have been installed with the 2.14 its

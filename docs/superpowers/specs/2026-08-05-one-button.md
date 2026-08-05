@@ -164,5 +164,31 @@ point of running them:
    `main` out of this repository — it is the wrong answer for every project
    still on `master`.
 
-Still to verify: a phone that has never seen the machine, and `roost uninstall`
-leaving the machine as it was — including the neighbours' nginx.
+Then `roost uninstall --purge`, and `roost up` again on the same machine.
+
+Teardown left: no rules in either address family, no group, no `/etc/roost`, no
+units, no launchers, no pockterm binary, no vhost — `nginx -t` still passes and
+the machine's own vhosts still answer. Kept, as the output says before it starts:
+the certificate, the projects directory with pockterm's session Makefile in it,
+the running tmux session, the agent binary, and `/etc/pockterm/pockterm.env` with
+its token — which is why the reinstall produced the same URL and the phone's saved
+link kept working.
+
+Three more defects, all found by that cycle:
+
+6. Teardown left `/var/www/roost-acme` and an empty `/opt/roost` behind — two
+   directories with roost's own name on them. The challenge directory is now
+   recorded as roost's (`EXPOSE_WEBROOT_OWNED`) so that a webroot the machine
+   already served from is never deleted, and `/opt/roost` goes with `rmdir`,
+   which declines when anything else is in it.
+7. The reinstall re-issued nothing: certbot's `creates` guard saw the existing
+   certificate, which matters because a rate limit is a poor way to learn about
+   an eager installer.
+8. `regex_search('…(\\S+)', '\\1')` written inside a `>-` block fails on
+   ansible-core 2.14 — "AttributeError: 'NoneType' object has no attribute
+   'group'" — while the same expression in a double-quoted scalar works. The
+   ansible on the development machine (2.19) accepts both, so neither `make
+   check` nor `ansible-lint` had anything to say; the target's own version found
+   it in seconds. It would have broken a real teardown, not only `--check`.
+
+Still to verify: a phone that has never seen the machine.
