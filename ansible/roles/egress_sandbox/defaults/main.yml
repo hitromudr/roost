@@ -49,4 +49,8 @@ egress_sandbox_env_file: /etc/roost/agent-proxy.env
 egress_sandbox_proxy_url: ""
 
 egress_sandbox_wrapper: /usr/local/bin/agent-run
+# The same policy for a caller that supplies the whole command line — the web
+# terminal's custom buttons. See files/agent-exec for why it cannot just be
+# `agent-run <command>`.
+egress_sandbox_exec_wrapper: /usr/local/bin/agent-exec
 egress_sandbox_firewall_bin: /usr/local/sbin/egress-firewall

@@ -41,6 +41,16 @@
     dest: "{{ egress_sandbox_wrapper }}"
     mode: "0755"
 
+# The other shape of the same launcher: for callers that hand over a whole
+# command line rather than arguments to the configured agent. The web
+# terminal's custom buttons are the reason it exists — see the header of the
+# script.
+- name: Install the launcher for an arbitrary command
+  ansible.builtin.copy:
+    src: agent-exec
+    dest: "{{ egress_sandbox_exec_wrapper }}"
+    mode: "0755"
+
 # The launcher reads its configuration from the environment, and a wrapper
 # script is the least surprising way to supply it: the user types `agent-run`,
 # not a line of exports.
@@ -99,8 +109,23 @@
     force: false
   when: egress_sandbox_proxy_url | length == 0
 
-# copy with force:false skips an existing file entirely — attributes and all —
-# so ownership is set separately.
+- name: Write the credentials file
+  ansible.builtin.copy:
+    content: "PROXY_URL={{ egress_sandbox_proxy_url }}\n"
+    dest: "{{ egress_sandbox_env_file }}"
+    owner: "{{ egress_sandbox_users | first | default('root') }}"
+    group: "{{ egress_sandbox_group }}"
+    mode: "0640"
+  when: egress_sandbox_proxy_url | length > 0
+  no_log: true
+
+# After both of the tasks that can create the file, and that order is the whole
+# point: copy with force:false skips an existing file entirely — attributes and
+# all — so ownership has to be set separately, but on a machine where the file
+# does not exist yet and a proxy *was* supplied, only the task above creates it.
+# Standing before that task, this one failed with "file is absent, cannot
+# continue" on the first stand installed from a config file rather than by hand
+# (FINKA, 2026-08-05). The old order worked only where the file already existed.
 #
 # Owned by the agent's account rather than by root: group membership is fixed
 # when a process starts, so a tmux server running since before this role first
@@ -113,16 +138,6 @@
     owner: "{{ egress_sandbox_users | first | default('root') }}"
     group: "{{ egress_sandbox_group }}"
     mode: "0640"
-
-- name: Write the credentials file
-  ansible.builtin.copy:
-    content: "PROXY_URL={{ egress_sandbox_proxy_url }}\n"
-    dest: "{{ egress_sandbox_env_file }}"
-    owner: "{{ egress_sandbox_users | first | default('root') }}"
-    group: "{{ egress_sandbox_group }}"
-    mode: "0640"
-  when: egress_sandbox_proxy_url | length > 0
-  no_log: true
 
 # A pinned profile with no proxy is not a locked-down agent, it is an agent
 # with no network at all: it rejects direct egress and offers nothing in its
@@ -162,8 +177,14 @@
 # Skipped under --check: the unit file is not written in that mode, so
 # systemd would report a service it has never heard of and the run would fail
 # on an artefact of the dry run rather than on anything real.
+#
+# `systemd`, not `systemd_service`: the newer name arrived in ansible-core
+# 2.16, and the ansible a distribution ships is often older — Debian 12 has
+# 2.14, Ubuntu 22.04 has 2.12. On those the role failed on an unknown module,
+# which is a strange way to learn that a stand cannot be installed. The old
+# name still resolves on current core, so this works both ways.
 - name: Enable the firewall unit
-  ansible.builtin.systemd_service:
+  ansible.builtin.systemd:
     name: egress-firewall
     enabled: "{{ egress_sandbox_profile != 'direct' }}"
     state: "{{ 'started' if egress_sandbox_profile != 'direct' else 'stopped' }}"

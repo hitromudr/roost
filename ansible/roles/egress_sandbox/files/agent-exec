@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# agent-exec — run a command line inside the sandbox group.
+#
+#   agent-exec qwen --yolo        start qwen in the group, with its arguments
+#
+# Why this exists next to agent-run. agent-run starts *the configured agent*:
+# whatever it is given on the command line goes to that agent as arguments. So
+# `agent-run qwen` starts Claude and hands it the word "qwen" — it works, it
+# reports success, and the thing the caller asked for never ran. Anything that
+# arrives as a whole command line rather than as arguments therefore needs the
+# other shape, and the web terminal's custom buttons are exactly that: the page
+# passes a command, the session Makefile puts it in $(AGENT) $(CMD).
+#
+# Without this, those buttons would still work — outside the sandbox. A policy
+# that silently does not apply to one button is worse than one that visibly
+# does not exist.
+#
+# The group, the proxy and the profile are not decided here: the first word
+# becomes AGENT_COMMAND and agent-run does the rest, so there is still one
+# policy for every agent on the machine.
+set -euo pipefail
+
+SELF="$(basename -- "$0")"
+LAUNCHER="${AGENT_RUN:-/usr/local/bin/agent-run}"
+
+die() { printf '%s: %s\n' "$SELF" "$*" >&2; exit 1; }
+
+[ $# -gt 0 ] || die "usage: $SELF <command> [args...]"
+[ -x "$LAUNCHER" ] || die "$LAUNCHER is not there — run 'roost install'"
+
+command="$1"
+shift
+
+# AGENT_COMMAND from the environment outranks the launcher's configuration file
+# by design, which is what makes this a one-line script instead of a second
+# copy of the policy.
+exec env AGENT_COMMAND="$command" "$LAUNCHER" "$@"

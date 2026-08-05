@@ -1,6 +1,8 @@
 ---
+# `systemd` rather than `systemd_service` — see the note in tasks/main.yml:
+# the newer name needs core 2.16, and distributions ship older.
 - name: Reapply egress policy
-  ansible.builtin.systemd_service:
+  ansible.builtin.systemd:
     name: egress-firewall
     state: restarted
     daemon_reload: true
