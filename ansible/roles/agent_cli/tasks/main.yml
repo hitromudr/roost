@@ -56,18 +56,26 @@
     # not guaranteed to be text at all and a decoding error would be one more
     # way of not saying what happened.
     - name: Read the start of what arrived
-      ansible.builtin.command: head -c 200 /tmp/roost-agent-install.sh
+      ansible.builtin.command: head -c 2000 /tmp/roost-agent-install.sh
       register: agent_cli_head
       changed_when: false
 
+    # The title, when there is one, and the first bytes otherwise. A page's
+    # opening bytes are a build stamp and a list of preconnect hints — true,
+    # useless, and where the first version of this message stopped. What says
+    # why is the title, and on the page this was written against it sits four
+    # hundred bytes in: `App unavailable in region | Claude by Anthropic`.
     - name: Refuse anything that is not a script
       ansible.builtin.assert:
         that: agent_cli_head.stdout.startswith('#!')
         fail_msg: >-
           {{ agent_cli_installer_url }} did not answer with a script — running
           it would report a shell syntax error and say nothing about why. What
-          came back begins: {{ agent_cli_head.stdout | trim }}
+          came back: {{ agent_cli_title | default(agent_cli_head.stdout[:200] | trim, true) }}
         quiet: true
+      vars:
+        agent_cli_title: >-
+          {{ (agent_cli_head.stdout | regex_search('<title>([^<]*)</title>', '\1') | default([], true) | first | default('', true)) | trim }}
 
     # Run as the agent's own account: the installer writes into that account's
     # ~/.local, and a copy under /root would not be the agent any session

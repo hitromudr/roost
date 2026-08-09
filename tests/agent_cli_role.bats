@@ -23,10 +23,13 @@ setup() {
     BIN="$BATS_TEST_TMPDIR/bin"
     mkdir -p "$BIN"
 
-    # The page a blocked region answers with, cut to its first line.
+    # The page a blocked region answers with, in the shape it actually
+    # arrives: the title — the one line that says why — sits behind a few
+    # hundred bytes of build stamp, domain attributes and preconnect hints.
+    # Copied from the real refusal rather than shortened, because a fixture
+    # with the answer in the first line tests a case that does not happen.
     cat > "$BATS_TEST_TMPDIR/blocked.html" <<'EOF'
-<!DOCTYPE html><html lang="en-US"><head><meta charset="utf-8"/>
-<title>App unavailable in region | Claude by Anthropic</title></head></html>
+<!DOCTYPE html><!-- Last Published: Thu Aug 06 2026 21:48:02 GMT+0000 (Coordinated Universal Time) --><html data-wf-domain="websitemain.claude.com" data-wf-page="68bd5cf2687bfe3893fd2b7f" data-wf-site="6889473510b50328dbb70ae6" data-wf-intellimize-customer-id="117902971" lang="en-US"><head><meta charset="utf-8"/><link href="https://cdn.prod.website-files.com" rel="preconnect" crossorigin="anonymous"/><title>App unavailable in region | Claude by Anthropic</title><meta content="Unfortunately, Claude isn't available here." name="description"/></head></html>
 EOF
 
     # A real installer, reduced to the one thing the role checks for after it.
@@ -76,4 +79,16 @@ run_role() {
     run run_role "$BATS_TEST_TMPDIR/install.sh"
     [ "$status" -eq 0 ]
     [ -x "$BIN/claude" ]
+}
+
+@test "an answer with no title still says what came back" {
+    # Not every refusal is a web page: a filtering proxy answers with JSON, an
+    # error page can have no title at all. The title is the better half of the
+    # message and not the only one, or this would report nothing whenever it is
+    # the first case that shows up.
+    printf '{"error":"forbidden by policy"}\n' > "$BATS_TEST_TMPDIR/denied.json"
+    run run_role "$BATS_TEST_TMPDIR/denied.json"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"did not answer with a script"* ]]
+    [[ "$output" == *"forbidden by policy"* ]]
 }
