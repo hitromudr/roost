@@ -43,6 +43,32 @@
         mode: "0755"
       environment: "{{ agent_cli_download_env }}"
 
+    # A 200 is not a script, and everything in the way answers with one.
+    # A regional block, a captive portal and a filtering proxy all reply with
+    # an HTML page and the status of a success — get_url is satisfied by both,
+    # and the page was then handed to bash. Measured 2026-08-09 installing into
+    # a container whose exit is not served by Anthropic: what came back was
+    # `App unavailable in region | Claude by Anthropic`, and the whole report
+    # was `syntax error near unexpected token '<'` on line 1. The machine had
+    # said exactly why, in the file it had just downloaded, and nothing read it.
+    #
+    # `head` rather than slurp, because what arrives when this goes wrong is
+    # not guaranteed to be text at all and a decoding error would be one more
+    # way of not saying what happened.
+    - name: Read the start of what arrived
+      ansible.builtin.command: head -c 200 /tmp/roost-agent-install.sh
+      register: agent_cli_head
+      changed_when: false
+
+    - name: Refuse anything that is not a script
+      ansible.builtin.assert:
+        that: agent_cli_head.stdout.startswith('#!')
+        fail_msg: >-
+          {{ agent_cli_installer_url }} did not answer with a script — running
+          it would report a shell syntax error and say nothing about why. What
+          came back begins: {{ agent_cli_head.stdout | trim }}
+        quiet: true
+
     # Run as the agent's own account: the installer writes into that account's
     # ~/.local, and a copy under /root would not be the agent any session
     # starts.
