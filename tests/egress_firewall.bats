@@ -12,6 +12,20 @@ setup() {
     export EGRESS_ALLOW=""
 }
 
+
+# no_iptables_path builds a PATH with everything the script needs except the one
+# thing under test. bash included: the script's shebang is `env bash`, and
+# without it the run fails with 127 before reaching any check — which is a test
+# measuring its own PATH rather than the script.
+no_iptables_path() {
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    local t src
+    for t in bash cat grep sed awk; do
+        src="$(command -v "$t" 2>/dev/null)" || continue
+        ln -sf "$src" "$BATS_TEST_TMPDIR/bin/$t"
+    done
+}
+
 rules() {
     run "$SCRIPT" rules
     [ "$status" -eq 0 ]
@@ -71,4 +85,30 @@ rules() {
         [[ -z "$line" || "$line" == \#* ]] && continue
         [[ "$line" == *"--comment"*"$EGRESS_GROUP"* ]]
     done <<< "$output"
+}
+
+# What happens on a host that has no iptables at all.
+#
+# Measured 2026-08-10 installing a stand into a clean Debian 13 container: the
+# unit exited 127 with `egress-firewall: line 78: iptables: command not found`,
+# and `roost install` reported "Unable to start service egress-firewall" — a
+# sentence about systemd, on a machine whose sandbox was simply not installable
+# yet. Such a host has nftables instead, and what bridges the two is a package.
+@test "apply names the missing tool instead of failing on line 78" {
+    # A PATH with the shell's own tools and no iptables. Not an empty PATH: the
+    # script is bash and needs its own utilities to get as far as the check.
+    no_iptables_path
+    run env PATH="$BATS_TEST_TMPDIR/bin" "$SCRIPT" apply
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"iptables"* ]]
+    [[ "$output" == *"not installed"* ]]
+}
+
+@test "direct needs no iptables, and must not ask for one" {
+    # The profile that installs nothing has no use for the tool, and a host
+    # that chose it must not be refused a sandbox over a package it will never
+    # call.
+    no_iptables_path
+    run env PATH="$BATS_TEST_TMPDIR/bin" EGRESS_PROFILE=direct "$SCRIPT" apply
+    [ "$status" -eq 0 ]
 }

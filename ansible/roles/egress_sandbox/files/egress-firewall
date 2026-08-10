@@ -78,7 +78,28 @@ run_rule() {
 	$bin "$verb" OUTPUT $args
 }
 
+# require_tools refuses before anything is applied, naming what is missing.
+#
+# The policy is made of iptables rules, and a host can simply not have the
+# command: measured 2026-08-10 installing a stand into a clean Debian 13
+# container, where the unit exited 127 with `line 78: iptables: command not
+# found` and roost reported "Unable to start service egress-firewall" — a
+# sentence about systemd, on a machine whose sandbox was not installable yet.
+# Such a host has nftables instead, and what bridges the two is a package.
+#
+# Asked only where the rules are actually used: `direct` installs nothing, and
+# refusing it over a command it will never call would be a sandbox denied for
+# nothing.
+require_tools() {
+	local bin
+	for bin in iptables ip6tables; do
+		command -v "$bin" >/dev/null \
+			|| die "$bin is not installed — the policy is made of its rules; install the iptables package (on an nftables host that is the iptables-nft shim)"
+	done
+}
+
 apply() {
+	[ "$PROFILE" = direct ] || require_tools
 	local line bin args
 	while read -r line; do
 		[ -z "$line" ] || [ "${line:0:1}" = "#" ] && continue

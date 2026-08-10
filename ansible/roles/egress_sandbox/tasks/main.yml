@@ -28,6 +28,20 @@
     append: true
   loop: "{{ egress_sandbox_users }}"
 
+# The rules are iptables rules, and a host does not have to have the command:
+# a clean Debian 13 does not, and its container is where this was found on
+# 2026-08-10 — the unit exited 127 and roost reported "Unable to start service
+# egress-firewall", which says nothing about a missing package. On such a host
+# the kernel side is nftables and this package is the shim that speaks to it.
+#
+# Skipped for `direct`, which installs no rules at all: a profile that never
+# calls the command must not drag it in.
+- name: Install what the policy is made of
+  ansible.builtin.package:
+    name: iptables
+    state: present
+  when: egress_sandbox_profile != 'direct'
+
 - name: Install the firewall script
   ansible.builtin.copy:
     src: egress-firewall
