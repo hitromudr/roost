@@ -36,11 +36,20 @@
         name: curl
         state: present
 
+    # force, because the copy on disk is not evidence about today. get_url asks
+    # the server whether it has anything newer, and a refusal already written to
+    # this path answers that question with "no": measured 2026-08-10, a 470KB
+    # HTML page downloaded on the 9th outlived the proxy that fixed the
+    # download, and every run afterwards refused by quoting it. The channel was
+    # working, the file was not, and the message described neither — worse than
+    # the failure it replaced, because it named a response the server no longer
+    # gave. Removing the file made the same command install the agent.
     - name: Fetch the official installer
       ansible.builtin.get_url:
         url: "{{ agent_cli_installer_url }}"
         dest: /tmp/roost-agent-install.sh
         mode: "0755"
+        force: true
       environment: "{{ agent_cli_download_env }}"
 
     # A 200 is not a script, and everything in the way answers with one.

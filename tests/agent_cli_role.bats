@@ -39,6 +39,11 @@ printf 'agent\n' > "$BIN/claude"
 chmod +x "$BIN/claude"
 EOF
 
+    # The role downloads to a fixed path. A file left there by an earlier run —
+    # this suite's or a real one's — is exactly the trap under test below, so
+    # each test starts without one.
+    rm -f /tmp/roost-agent-install.sh 2>/dev/null || true
+
     printf 'localhost ansible_connection=local\n' > "$BATS_TEST_TMPDIR/inventory"
     cat > "$BATS_TEST_TMPDIR/play.yml" <<'EOF'
 ---
@@ -50,15 +55,18 @@ EOF
 EOF
 }
 
-# run_role <installer file> — the role against a URL that serves that file.
-run_role() {
+# run_role <installer file> — the role against a file:// URL for that file.
+run_role() { run_role_url "file://$1"; }
+
+# run_role_url <url> — what both go through.
+run_role_url() {
     ANSIBLE_ROLES_PATH="$ROLES" ansible-playbook \
         -i "$BATS_TEST_TMPDIR/inventory" \
         "$BATS_TEST_TMPDIR/play.yml" \
         -e "agent_cli_user=$(id -un)" \
         -e "agent_cli_command=$BIN/claude" \
         -e "agent_cli_state_file=$BATS_TEST_TMPDIR/agent.env" \
-        -e "agent_cli_installer_url=file://$1" \
+        -e "agent_cli_installer_url=$1" \
         2>&1
 }
 
@@ -91,4 +99,23 @@ run_role() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"did not answer with a script"* ]]
     [[ "$output" == *"forbidden by policy"* ]]
+}
+
+@test "the download is forced, so yesterday's refusal is not today's report" {
+    # The trap this cost an evening, and the one thing here the stand cannot
+    # act out. get_url asks the server whether its copy is newer than the one
+    # on disk; the first failed attempt had written a 470KB HTML page to the
+    # fixed path, the answer was "no", and every later run read *that*. The
+    # channel was fixed and proven by hand, and the role went on refusing with
+    # a quotation from the day before — a message naming a response the server
+    # no longer gives, which is worse than the refusal it replaced.
+    #
+    # Measured on the container this was found in: removing the file made the
+    # very same command install the agent. Reproducing it needs a server that
+    # answers a conditional request, and a background one hangs bats on the
+    # descriptor it hands every test — so what is guarded here is the property
+    # that makes the question moot.
+    grep -A 8 'name: Fetch the official installer' \
+        "$BATS_TEST_DIRNAME/../ansible/roles/agent_cli/tasks/main.yml" \
+        | grep -q 'force: true'
 }
