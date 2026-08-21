@@ -1120,6 +1120,29 @@ cmd_doctor() {
 			else
 				warn "the agent goes out from $exit_addr (expected_exit is not set, so nothing was compared)"
 			fi
+
+			# The exit address says the proxy works. It does not say the proxy
+			# is the only way out — and that is the claim the pinned profile is
+			# actually making. A request from inside the group that ignores the
+			# proxy variables must not be answered at all; if it is, the policy
+			# is not in force and traffic can leave past the proxy while the
+			# exit-address check above stays green.
+			#
+			# Asked with a throwaway curl rather than by starting the agent: for
+			# an agent that is logged in, a request from an unexpected address
+			# costs the account, so the agent is the one tool that must not be
+			# used to test its own network.
+			local direct_addr
+			direct_addr="$(sg "$group" -c "curl -s --noproxy '*' --max-time 15 $exit_probe" </dev/null 2>/dev/null | tr -d '[:space:]' || true)"
+			if [ -n "$direct_addr" ]; then
+				bad "the sandbox has a direct way out ($direct_addr) — traffic can leave past the proxy"
+				echo "      the exit address above only says the proxy answers; this says"
+				echo "      it is not the only way out"
+				echo "      fix: roost install, then check: systemctl status egress-firewall"
+				failed=1
+			else
+				ok "no direct way out of the sandbox"
+			fi
 		fi
 	fi
 

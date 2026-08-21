@@ -831,3 +831,42 @@ CONF
     run "$ROOST" token < /dev/null
     [[ "$output" == *"client certificates"* ]]
 }
+
+# --- the sandbox has one way out, not one that works --------------------
+
+@test "doctor calls out a direct way out of the sandbox" {
+    # The exit-address check passes here: through the proxy the address is the
+    # expected one. What fails is the second question — a request that ignores
+    # the proxy is answered, so the policy is not in force.
+    write_conf
+    printf 'expected_exit=45.85.93.228\n' >> "$ROOST_CONF"
+    export ROOST_PROXY_ENV="$BATS_TEST_TMPDIR/proxy.env"
+    printf 'PROXY_URL=http://user:pass@127.0.0.1:8129\n' > "$ROOST_PROXY_ENV"
+    export ROOST_AGENT_RUN_ENV="$BATS_TEST_TMPDIR/agent-run.env"
+    printf 'AGENT_GROUP=agent-sandbox\n' > "$ROOST_AGENT_RUN_ENV"
+    printf '#!/usr/bin/env bash\ncase "$*" in *--noproxy*) echo 203.0.113.9 ;; *) echo 45.85.93.228 ;; esac\n' \
+        > "$STUB_DIR/sg"
+    printf '#!/usr/bin/env bash\necho 198.51.100.1\n' > "$STUB_DIR/curl"
+    chmod +x "$STUB_DIR/sg" "$STUB_DIR/curl"
+    STUB_RC=1 run "$ROOST" doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"as expected"* ]]
+    [[ "$output" == *"direct way out"* ]]
+    [[ "$output" == *"203.0.113.9"* ]]
+}
+
+@test "doctor says so when the proxy is the only way out" {
+    write_conf
+    printf 'expected_exit=45.85.93.228\n' >> "$ROOST_CONF"
+    export ROOST_PROXY_ENV="$BATS_TEST_TMPDIR/proxy.env"
+    printf 'PROXY_URL=http://user:pass@127.0.0.1:8129\n' > "$ROOST_PROXY_ENV"
+    export ROOST_AGENT_RUN_ENV="$BATS_TEST_TMPDIR/agent-run.env"
+    printf 'AGENT_GROUP=agent-sandbox\n' > "$ROOST_AGENT_RUN_ENV"
+    printf '#!/usr/bin/env bash\ncase "$*" in *--noproxy*) exit 7 ;; *) echo 45.85.93.228 ;; esac\n' \
+        > "$STUB_DIR/sg"
+    printf '#!/usr/bin/env bash\necho 198.51.100.1\n' > "$STUB_DIR/curl"
+    chmod +x "$STUB_DIR/sg" "$STUB_DIR/curl"
+    STUB_RC=1 run "$ROOST" doctor
+    [[ "$output" == *"no direct way out"* ]]
+    [[ "$output" != *"direct way out ("* ]]
+}
