@@ -124,8 +124,28 @@
 # different claims, and the difference here is an agent that dies on its first
 # session. Failure is not fatal — an agent that cannot answer `--version` may
 # still be one the operator wants recorded — but it is said out loud.
+#
+# Asked under the sandbox group where there is one, because the path may be a
+# gate rather than the binary (see agent_cli_sandbox_group): a gate refuses the
+# plain call, and the refusal would be recorded as an unknown version. Measured
+# on the RPi5 and the spare laptop, where ~/.local/bin/claude is exactly that.
 - name: Ask the agent for its version
-  ansible.builtin.command: "{{ agent_cli_command }} --version"
+  ansible.builtin.shell: |
+    set -u
+    # Membership by string match rather than piping `id -nG` into `grep -q`:
+    # grep leaves as soon as it matches, the writer takes SIGPIPE, and under
+    # pipefail the status becomes 141 — false exactly when the group is there.
+    # Padded with spaces so "agent" cannot match inside "agent-sandbox".
+    case " $(id -nG "$AGENT_USER") " in
+      *" $AGENT_GROUP "*) exec sg "$AGENT_GROUP" -c "\"$AGENT_CMD\" --version" ;;
+    esac
+    exec "$AGENT_CMD" --version
+  environment:
+    # Passed as values rather than pasted into the script: a path or a group
+    # name goes into the shell as data, not as text that becomes syntax.
+    AGENT_USER: "{{ agent_cli_user }}"
+    AGENT_GROUP: "{{ agent_cli_sandbox_group }}"
+    AGENT_CMD: "{{ agent_cli_command }}"
   register: agent_cli_version_out
   changed_when: false
   failed_when: false
@@ -139,7 +159,9 @@
       {{ agent_cli_command }} is installed but `--version` failed
       ({{ agent_cli_version_out.stderr | default('') | trim }}). Sessions
       started for it will close immediately — check the binary before relying
-      on the stand.
+      on the stand. A gate on that path refuses launches from outside
+      {{ agent_cli_sandbox_group }}, so check that group first: this run asked
+      under it only if the account is a member.
   when:
     - not ansible_check_mode
     - agent_cli_version_out.rc | default(1) != 0

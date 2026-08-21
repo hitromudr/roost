@@ -448,6 +448,64 @@ CONF
     [[ "$output" == *"roost agent"* ]]
 }
 
+# --- the path a launch without the launcher takes ------------------------
+#
+# The gate is not roost's file — the operator's dotfiles install it, on this
+# machine and on machines roost does not manage — but its absence is roost's
+# business. On the spare laptop 2026-08-21 the whole stand reported green while
+# `claude` in PATH was a symlink at the binary, so a shell, a script, a unit or
+# cron calling the name went out unsandboxed from the machine's own address.
+
+@test "doctor calls out a launch path that is a symlink at the binary" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=pinned
+agent_command=$BATS_TEST_TMPDIR/claude
+CONF
+    ln -s /bin/true "$BATS_TEST_TMPDIR/claude"
+    STUB_RC=1 run "$ROOST" doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"symlink to the binary"* ]]
+    [[ "$output" == *"install-agent-gates.sh"* ]]
+}
+
+@test "doctor calls out a launch path that starts the agent outside the sandbox" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=pinned
+agent_command=$BATS_TEST_TMPDIR/claude
+CONF
+    printf '#!/bin/sh\nexit 0\n' > "$BATS_TEST_TMPDIR/claude"
+    chmod +x "$BATS_TEST_TMPDIR/claude"
+    STUB_RC=1 run "$ROOST" doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"started outside the sandbox"* ]]
+}
+
+@test "doctor is satisfied with a path that refuses an unsandboxed launch" {
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=pinned
+agent_command=$BATS_TEST_TMPDIR/claude
+CONF
+    # What a gate does, reduced to the part under test: refuse a run whose
+    # effective GID is not a sandbox group. doctor runs it under the caller's
+    # own primary group, which never is one.
+    printf '#!/bin/sh\nexit 1\n' > "$BATS_TEST_TMPDIR/claude"
+    chmod +x "$BATS_TEST_TMPDIR/claude"
+    STUB_RC=1 run "$ROOST" doctor
+    [[ "$output" == *"refuses a launch from outside the sandbox"* ]]
+}
+
+@test "the direct profile is not asked about a gate" {
+    # Nothing is confined, so there is no sandbox for a gate to keep a launch
+    # inside of; naming one would be advice about a policy this stand declined.
+    cat > "$ROOST_CONF" <<CONF
+egress_profile=direct
+agent_command=$BATS_TEST_TMPDIR/claude
+CONF
+    ln -s /bin/true "$BATS_TEST_TMPDIR/claude"
+    STUB_RC=1 run "$ROOST" doctor
+    [[ "$output" != *"symlink to the binary"* ]]
+}
+
 @test "doctor calls out a terminal whose buttons bypass the sandbox" {
     cat > "$ROOST_CONF" <<CONF
 egress_profile=direct

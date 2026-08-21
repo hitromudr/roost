@@ -70,6 +70,62 @@ run_role_url() {
         2>&1
 }
 
+# run_role_gated <group> — the role against an agent path that behaves like the
+# gate: it answers `--version` only when the effective GID is that group.
+#
+# Nothing is installed here (agent_cli_install=false), because what is under
+# test is the question the role asks afterwards.
+run_role_gated() {
+    cat > "$BIN/claude" <<EOF
+#!/bin/sh
+[ "\$(id -gn)" = "$1" ] || { echo "gate: refused" >&2; exit 1; }
+echo "9.9.9 (Stub Agent)"
+EOF
+    chmod +x "$BIN/claude"
+    ANSIBLE_ROLES_PATH="$ROLES" ansible-playbook \
+        -i "$BATS_TEST_TMPDIR/inventory" \
+        "$BATS_TEST_TMPDIR/play.yml" \
+        -e "agent_cli_user=$(id -un)" \
+        -e "agent_cli_command=$BIN/claude" \
+        -e "agent_cli_state_file=$BATS_TEST_TMPDIR/agent.env" \
+        -e "agent_cli_install=false" \
+        -e "agent_cli_sandbox_group=$2" \
+        2>&1
+}
+
+# A group this account is in that is not the one it is running under — the one
+# thing the machine has to provide for these two tests. It has to differ from
+# the current effective GID, or the stub answers the same way whether the role
+# used `sg` or not and the test proves nothing: measured here, where the suite
+# itself runs inside the sandbox group. Skipped rather than faked, because `sg`
+# into a group the account does not belong to asks for a password.
+second_group() {
+    id -Gn | tr ' ' '\n' | grep -vx "$(id -gn)" | head -1
+}
+
+@test "the version is asked under the sandbox group, so a gate does not become 'unknown'" {
+    # The path in the config is not always the binary: on both machines here it
+    # is a gate refusing any launch whose effective GID is not a sandbox group.
+    # Asked plainly, that refusal was recorded as an unknown version — a stand
+    # that cannot name its agent's version precisely because it is protected.
+    local group; group="$(second_group)"
+    [ -n "$group" ] || skip "this account has no group besides the one it runs under"
+    run run_role_gated "$group" "$group"
+    [ "$status" -eq 0 ]
+    grep -q '9.9.9' "$BATS_TEST_TMPDIR/agent.env"
+}
+
+@test "a sandbox group this machine does not have leaves the plain call" {
+    # The first run of a new stand: the sandbox comes after this role, so there
+    # is no group to ask under yet, and the plain call is the only thing left.
+    local group; group="$(second_group)"
+    [ -n "$group" ] || skip "this account has no group besides the one it runs under"
+    run run_role_gated "$group" "no-such-group-$$"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--version"*"failed"* ]]
+    grep -q 'unknown' "$BATS_TEST_TMPDIR/agent.env"
+}
+
 @test "a page instead of a script is refused, and named" {
     run run_role "$BATS_TEST_TMPDIR/blocked.html"
     [ "$status" -ne 0 ]

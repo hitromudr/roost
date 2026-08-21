@@ -49,3 +49,17 @@ agent_cli_download_env: >-
 
 # What this role installed, for the CLI to read and for teardown to remove.
 agent_cli_state_file: /etc/roost/agent.env
+
+# The sandbox group, named here only to ask the agent its version under it.
+#
+# agent_cli_command is not always the binary: the operator's dotfiles put a gate
+# on that path — a file that refuses any launch whose effective GID is not a
+# sandbox group, so that a script, a unit or cron cannot start an agent outside
+# the sandbox. A gate answers `--version` with a refusal, and what then lands in
+# the state file is "unknown": a stand that cannot name its own agent's version
+# precisely because its protection works.
+#
+# Kept in step with egress_sandbox_group. A group this machine does not have, or
+# one the account is not in, means the plain call — which is also the first run
+# of a new stand, where the sandbox does not exist yet.
+agent_cli_sandbox_group: agent-sandbox

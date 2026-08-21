@@ -357,6 +357,21 @@ resolved_agent_command() {
 	printf '%s\n' "${installed:-/usr/local/bin/claude}"
 }
 
+# sandbox_group answers "which group is the policy written for?".
+#
+# Taken from the file the sandbox itself wrote, so a machine that has a sandbox
+# has one answer rather than a second default kept somewhere else. Two defaults
+# for one setting is a defect with its own history here: the update script and
+# the wrapper had one each for the sandbox group, they drifted, and what the
+# machine reported was a wrapper that worked while every update died on a group
+# that does not exist on it. The fallback is for the first run of a new stand,
+# where the sandbox has not been applied yet and there is no file to read.
+sandbox_group() {
+	local group
+	group="$(sed -n 's/^AGENT_GROUP=//p' "$AGENT_RUN_ENV" 2>/dev/null | tail -n1)"
+	printf '%s\n' "${group:-agent-sandbox}"
+}
+
 # --- the agent, the terminal, the way in --------------------------------
 # Three commands rather than three more responsibilities for `install`: each
 # touches something the machine may already have an owner for, and each says so
@@ -368,6 +383,7 @@ cmd_agent() {
 	run_playbook stand.yml --tags agent \
 		-e "agent_cli_user=$(id -un)" \
 		-e "agent_cli_install=$agent_install" \
+		-e "agent_cli_sandbox_group=$(sandbox_group)" \
 		${agent_command:+-e "agent_cli_command=$agent_command"} \
 		${proxy_url:+-e "agent_cli_proxy_url=$proxy_url"}
 
@@ -1086,6 +1102,51 @@ cmd_doctor() {
 		bad "$agent is not an executable file — sessions started for it will close at once"
 		echo "      fix: roost agent"
 		failed=1
+	fi
+
+	# Is that path guarded? A stand can be complete and still leave the
+	# shortest way in wide open. Measured on the spare laptop 2026-08-21: every
+	# check here was green while `claude` in PATH was a symlink straight at the
+	# binary, so anything that typed the agent's name — a shell, a script, a
+	# unit, cron, ssh — started it outside the sandbox and left from the
+	# machine's own address. The launcher was correct, and nothing was obliged
+	# to use it.
+	#
+	# roost does not install the gate that refuses such a launch: it comes from
+	# the operator's own files and also has to work on machines roost does not
+	# manage, and a second installer for one path is how two owners begin to
+	# disagree over it. What roost owes is the measurement — and a measurement,
+	# not a look at the file, because root-owned and executable says nothing
+	# about what a file does when it runs.
+	if [ "$egress_profile" != direct ] && [ -x "$agent" ]; then
+		local own_group sandbox_group
+		# The account's login group, not the current one: doctor is often run
+		# from inside a sandboxed session (`id -gn` there is the sandbox group),
+		# and asking the question under that group answers a different one — the
+		# gate would let it through, which is what the gate is for. `id -gn
+		# <user>` reads the group from the account, so the measurement is the
+		# same wherever doctor is typed.
+		own_group="$(id -gn "$(id -un)")"
+		sandbox_group="$(sandbox_group)"
+		if [ "$own_group" = "$sandbox_group" ]; then
+			warn "the login group of $(id -un) is $own_group, the sandbox group itself — nothing here can tell whether $agent refuses a launch from outside the sandbox"
+		elif [ -L "$agent" ]; then
+			# A symlink is the binary under another name: there is nothing there
+			# to refuse with. Reported without running anything — for an agent
+			# that is logged in, an unsandboxed start is the risk being
+			# described, not an acceptable step in describing it.
+			bad "$agent is a symlink to the binary — typing the agent's name starts it outside the sandbox"
+			echo "      the launcher is not the only way in: a script, a unit, cron or ssh"
+			echo "      calls the name, and this path has nothing to refuse them with"
+			echo "      fix: install the gate for it (dotfiles: ./install-agent-gates.sh)"
+			failed=1
+		elif sg "$own_group" -c "$(printf '%q --version' "$agent")" >/dev/null 2>&1 </dev/null; then
+			bad "$agent started outside the sandbox — nothing guards the path a launch without the launcher takes"
+			echo "      fix: install the gate for it (dotfiles: ./install-agent-gates.sh)"
+			failed=1
+		else
+			ok "$agent refuses a launch from outside the sandbox"
+		fi
 	fi
 
 	# Which address does the agent's traffic leave from?
