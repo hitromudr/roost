@@ -263,3 +263,15 @@ EOF
     [[ "$output" == *"names this launcher"* ]]
     [[ "$output" != *"sg-called"* ]]
 }
+
+@test "a launcher given itself as the agent is refused, by name or by path" {
+    # make custom CMD='agent-run …' set AGENT_COMMAND=agent-run and the
+    # launcher re-ran itself until the machine noticed (~18,700 processes).
+    ln -s "$SCRIPT" "$STUB_DIR/agent-run"
+    for cmd in agent-run "$STUB_DIR/agent-run" "$SCRIPT"; do
+        run env AGENT_COMMAND="$cmd" "$SCRIPT" --model opus
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"is this launcher"* ]]
+        [[ "$output" != *"sg-called"* ]]
+    done
+}

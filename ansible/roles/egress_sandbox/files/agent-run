@@ -89,6 +89,17 @@ case "$COMMAND" in
 	*)   command -v "$COMMAND" >/dev/null 2>&1 || die "AGENT_COMMAND=$COMMAND is not in PATH" ;;
 esac
 
+# The launcher as its own agent is a fork bomb, not a typo: the child inherits
+# AGENT_COMMAND, finds itself again, and so on — bash only notices at SHLVL
+# 1000, resets it and carries on. It happened through `make custom
+# CMD='agent-run …'` (the recipe already wraps CMD in agent-run): ~18,700
+# processes in seconds, three tmux sessions printing "shell level too high".
+# The check above only covers an agent file; this one covers the environment
+# and a bare name, which readlink alone cannot resolve.
+if [ "$(readlink -f -- "$(command -v -- "$COMMAND")" 2>/dev/null)" = "$(readlink -f -- "$0")" ]; then
+	die "AGENT_COMMAND=$COMMAND is this launcher, not an agent (it would start itself forever)"
+fi
+
 if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
 	# Credentials in a world-readable file are a misconfiguration worth
 	# stopping for: every account on the machine could read the proxy
