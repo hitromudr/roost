@@ -7,6 +7,10 @@ bin/
 roost.conf
 projects.conf
 ansible/inventory
+# Variables the CLI does not pass, kept per stand: `egress_sandbox_allow` is a
+# property of the network the machine sits in. Ansible reads this directory
+# next to the playbook on every run, `roost install` included.
+ansible/playbooks/group_vars/
 *.log
 
 # Ansible's own working directory next to ansible.cfg: a lock file and empty
