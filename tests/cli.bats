@@ -54,6 +54,25 @@ EOF
     grep -q "egress_sandbox_profile=pinned" "$STUB_LOG"
 }
 
+@test "install --check asks ansible for a dry run and says nothing changed" {
+    write_conf
+    run "$ROOST" install --check
+    [ "$status" -eq 0 ]
+    grep -q "ansible-playbook.* --check --diff" "$STUB_LOG"
+    [[ "$output" == *"nothing was changed"* ]]
+    [[ "$output" != *"the sandbox is configured"* ]]
+}
+
+@test "an unknown install option is refused before ansible runs" {
+    # It used to be ignored: `roost install --check --diff` applied the
+    # configuration for real on 2026-11-03, while the caller expected a dry run.
+    write_conf
+    run "$ROOST" install --diff
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--diff"* ]]
+    ! grep -q "ansible-playbook" "$STUB_LOG"
+}
+
 @test "an unknown egress profile is refused" {
     write_conf sieve
     run "$ROOST" install

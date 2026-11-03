@@ -3,7 +3,7 @@
 #
 #   roost up        the whole thing: agent, sandbox, terminal, QR code
 #   roost setup     answer a few questions, write roost.conf
-#   roost install   apply the configuration to this machine
+#   roost install [--check]         apply the configuration to this machine
 #   roost agent     install the agent binary if it is not here yet
 #   roost terminal  put a web terminal on this machine (only if there is none)
 #   roost expose    serve that terminal over TLS, and say at what address
@@ -305,6 +305,20 @@ run_playbook() {
 # --- install ------------------------------------------------------------
 
 cmd_install() {
+	# --check is the dry run: ansible reports what it would change and changes
+	# nothing. Anything else is refused rather than ignored — an ignored
+	# `--check` once applied the configuration for real while the caller
+	# expected a dry run (2026-11-03), and on a machine that is its own stand a
+	# failed run breaks the machine the session works from.
+	local check=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--check) check=1 ;;
+			*) die "unknown option $1 (expected --check)" ;;
+		esac
+		shift
+	done
+
 	load_conf
 	check_conf
 
@@ -323,8 +337,12 @@ cmd_install() {
 		trap "rm -f '$vars'" EXIT
 	fi
 
-	log "applying the configuration"
-	run_playbook stand.yml --tags egress,sessions,env \
+	if [ -n "$check" ]; then
+		log "dry run: what would change (nothing is applied)"
+	else
+		log "applying the configuration"
+	fi
+	run_playbook stand.yml --tags egress,sessions,env ${check:+--check --diff} \
 		-e "egress_sandbox_profile=$egress_profile" \
 		-e "egress_sandbox_agent_command=$(resolved_agent_command)" \
 		-e "agent_sessions_user=$(id -un)" \
@@ -337,6 +355,10 @@ cmd_install() {
 		-e "{\"egress_sandbox_agents\": $(agents_json)}" \
 		${vars:+-e "@$vars"}
 
+	if [ -n "$check" ]; then
+		ok "dry run finished — nothing was changed; run without --check to apply"
+		return 0
+	fi
 	ok "the sandbox is configured"
 	log "next: roost doctor"
 }
