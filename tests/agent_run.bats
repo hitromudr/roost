@@ -275,3 +275,22 @@ EOF
         [[ "$output" != *"sg-called"* ]]
     done
 }
+
+@test "a named launcher given as the agent hands over to that launcher" {
+    # pockterm's custom button runs `make custom CMD='gemini-safe'`, which
+    # becomes AGENT_COMMAND=gemini-safe agent-run. gemini-safe is this script
+    # under an agent's name and resets AGENT_COMMAND itself, so there is no
+    # loop to refuse — the refusal above made every such button die at once.
+    mkdir -p "$BATS_TEST_TMPDIR/agents"
+    printf 'AGENT_COMMAND=/usr/bin/env\n' > "$BATS_TEST_TMPDIR/agents/codex.env"
+    ln -s "$SCRIPT" "$STUB_DIR/codex-safe"
+    for cmd in codex-safe "$STUB_DIR/codex-safe"; do
+        run env AGENT_COMMAND="$cmd" AGENT_DIR="$BATS_TEST_TMPDIR/agents" \
+            "$SCRIPT" -a never
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"sg-called group=agent-sandbox"* ]]
+        [[ "$output" == *"arg=[/usr/bin/env]"* ]]
+        [[ "$output" == *"arg=[-a]"* ]]
+        [[ "$output" == *"arg=[never]"* ]]
+    done
+}

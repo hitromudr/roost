@@ -48,7 +48,22 @@ AGENT_DIR="${AGENT_DIR:-/etc/roost/agents}"
 # install, and saying so here is the difference between a message and a
 # session that dies the moment tmux opens it.
 case "$SELF" in
-	agent-run) ;;
+	agent-run)
+		# A custom button passes a named launcher as the agent:
+		# `make custom CMD='codex-safe -a never'` becomes
+		# AGENT_COMMAND=codex-safe agent-run -a never. That name is this script
+		# under an agent's name, which drops AGENT_COMMAND and reads its own
+		# file, so there is no loop — hand over to it rather than refuse below.
+		# Only a name other than agent-run qualifies: agent-run itself would
+		# come straight back here.
+		if [ -n "${AGENT_COMMAND:-}" ]; then
+			named="$(command -v -- "$AGENT_COMMAND" 2>/dev/null || true)"
+			if [ -n "$named" ] && [ "$(basename -- "$named")" != agent-run ] &&
+				[ "$(readlink -f -- "$named" 2>/dev/null)" = "$(readlink -f -- "$0")" ]; then
+				exec "$named" "$@"
+			fi
+		fi
+		;;
 	*)
 		agent="${SELF%-safe}"
 		agent="${agent%-run}"
