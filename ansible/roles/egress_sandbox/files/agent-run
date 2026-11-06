@@ -14,6 +14,7 @@
 #   AGENT_GROUP     group to run under
 #   AGENT_COMMAND   the agent binary
 #   AGENT_ENV_FILE  optional file with PROXY_URL and anything else it needs
+#   AGENT_DIRECT    destinations reached without the proxy (proxied profile)
 #
 # A second agent is a second name for this script, not a second script: a
 # symlink called `codex-safe` (or `codex-run`) reads
@@ -147,7 +148,17 @@ if [ -n "${PROXY_URL:-}" ]; then
 	export https_proxy="$PROXY_URL" http_proxy="$PROXY_URL" all_proxy="$PROXY_URL"
 	# Without this the agent would try to reach a local service through the
 	# proxy, which the proxy has no route to.
-	export NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1"
+	no_proxy_list="localhost,127.0.0.1"
+	# The proxied profile also opens AGENT_DIRECT (egress_sandbox_allow) to the
+	# agent without the proxy — typically the LAN. The proxy has no route
+	# there either: a LAN host answered 502 through it and 200 directly, and
+	# sessions kept reporting the LAN as unreachable. Send those direct.
+	if [ "$PROFILE" = proxied ] && [ -n "${AGENT_DIRECT:-}" ]; then
+		for dest in $AGENT_DIRECT; do
+			no_proxy_list="$no_proxy_list,$dest"
+		done
+	fi
+	export NO_PROXY="$no_proxy_list" no_proxy="$no_proxy_list"
 fi
 
 # A hook for the test suite: show what the environment would be, then carry on.

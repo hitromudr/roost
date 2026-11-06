@@ -94,6 +94,26 @@ EOF
     ! grep -q "secret" "$SCRIPT"
 }
 
+@test "destinations the firewall lets through directly bypass the proxy" {
+    # The proxied profile opens these to the agent without the proxy, and the
+    # proxy has no route to them (a LAN host answered 502 through it, 200
+    # directly) — so they belong in NO_PROXY, not behind the proxy.
+    printf 'PROXY_URL=http://user:secret@127.0.0.1:8129\n' > "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    run env AGENT_DEBUG_ENV=1 AGENT_PROFILE=proxied AGENT_DIRECT="192.168.0.0/16 10.1.2.3" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NO_PROXY=localhost,127.0.0.1,192.168.0.0/16,10.1.2.3"* ]]
+}
+
+@test "the pinned profile keeps only loopback off the proxy" {
+    printf 'PROXY_URL=http://user:secret@127.0.0.1:8129\n' > "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    run env AGENT_DEBUG_ENV=1 AGENT_PROFILE=pinned AGENT_DIRECT="192.168.0.0/16" "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NO_PROXY=localhost,127.0.0.1"* ]]
+    [[ "$output" != *"192.168"* ]]
+}
+
 @test "runs without an env file, for the direct profile" {
     rm -f "$ENV_FILE"
     run env AGENT_PROFILE=direct "$SCRIPT"
