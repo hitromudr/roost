@@ -314,3 +314,60 @@ EOF
         [[ "$output" == *"arg=[never]"* ]]
     done
 }
+
+# --- one agent, its own exit ---------------------------------------------
+# The Gemini subscription leaves through a Georgian exit, its API key through
+# the machine's own (2026-11-06). The agent's file names the proxy file and
+# the variables that pin the mode, and both must win over whatever the caller
+# inherited: a key-mode window opened from inside a subscription session must
+# not leave through Georgia, nor the other way round.
+
+env_stub() {
+    cat > "$STUB_DIR/sg" <<'STUB'
+#!/usr/bin/env bash
+echo "sg-called group=$1"
+env | grep -E '^(AGENT_ENV_FILE|PINNED_MODE|HTTPS_PROXY)=' | sed 's/^/env:/'
+STUB
+    chmod +x "$STUB_DIR/sg"
+}
+
+@test "an agent's file can name its own proxy" {
+    mkdir -p "$BATS_TEST_TMPDIR/agents"
+    printf 'PROXY_URL=http://ge:pw@127.0.0.1:12129\n' > "$BATS_TEST_TMPDIR/ge.env"
+    chmod 640 "$BATS_TEST_TMPDIR/ge.env"
+    printf 'AGENT_COMMAND=/usr/bin/true\nAGENT_ENV_FILE=%s\n' "$BATS_TEST_TMPDIR/ge.env" \
+        > "$BATS_TEST_TMPDIR/agents/gemini-sub.env"
+    ln -s "$SCRIPT" "$BATS_TEST_TMPDIR/gemini-sub-safe"
+    run env AGENT_DIR="$BATS_TEST_TMPDIR/agents" AGENT_PROFILE=proxied AGENT_DEBUG_ENV=1 \
+        "$BATS_TEST_TMPDIR/gemini-sub-safe"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"HTTPS_PROXY=http://ge:pw@127.0.0.1:12129"* ]]
+}
+
+@test "an agent's file outranks what the caller inherited" {
+    env_stub
+    mkdir -p "$BATS_TEST_TMPDIR/agents"
+    printf 'AGENT_COMMAND=/usr/bin/true\nAGENT_ENV_FILE=%s\nPINNED_MODE=key\n' "$ENV_FILE" \
+        > "$BATS_TEST_TMPDIR/agents/gemini-key.env"
+    printf 'PROXY_URL=http://ge:pw@127.0.0.1:12129\n' > "$BATS_TEST_TMPDIR/ge.env"
+    chmod 640 "$BATS_TEST_TMPDIR/ge.env"
+    ln -s "$SCRIPT" "$BATS_TEST_TMPDIR/gemini-key-safe"
+    # As if opened from inside a subscription session.
+    run env AGENT_DIR="$BATS_TEST_TMPDIR/agents" AGENT_PROFILE=proxied \
+        AGENT_ENV_FILE="$BATS_TEST_TMPDIR/ge.env" PINNED_MODE=subscription \
+        "$BATS_TEST_TMPDIR/gemini-key-safe"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"env:PINNED_MODE=key"* ]]
+    [[ "$output" == *"env:HTTPS_PROXY=http://user:secret@127.0.0.1:8129"* ]]
+    [[ "$output" != *"12129"* ]]
+}
+
+@test "the agent's session does not carry the proxy file onward" {
+    # Otherwise a window opened from that session by an agent whose file names
+    # no proxy of its own would inherit this one's exit.
+    env_stub
+    run env AGENT_PROFILE=proxied "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"env:HTTPS_PROXY="* ]]
+    [[ "$output" != *"env:AGENT_ENV_FILE="* ]]
+}

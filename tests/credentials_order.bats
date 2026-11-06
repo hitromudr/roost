@@ -33,3 +33,26 @@ setup() {
 @test "the seeded file is never overwritten" {
     grep -A12 'name: Seed the credentials file' "$ROLE" | grep -q 'force: false'
 }
+
+# An agent's own proxy file (egress_sandbox_agent_env) follows the same rule.
+@test "an agent's own proxy file is seeded, never overwritten" {
+    grep -A12 "name: Seed each agent's own proxy file" "$ROLE" | grep -q 'force: false'
+}
+
+@test "an agent's file carries the lines named for it" {
+    command -v python3 >/dev/null && python3 -c 'import jinja2' 2>/dev/null || skip "no jinja2"
+    run python3 - "$BATS_TEST_DIRNAME/../ansible/roles/egress_sandbox/templates/agent.env.j2" <<'PY'
+import sys, jinja2
+env = jinja2.Environment(trim_blocks=True)
+t = env.from_string(open(sys.argv[1]).read())
+print(t.render(ansible_managed="x", egress_sandbox_agent_suffix="-safe",
+               item={"key": "gemini-sub", "value": "/bin/gemini"},
+               egress_sandbox_agent_env={"gemini-sub": {"AGENT_ENV_FILE": "/etc/p.env", "B": "2"}}))
+print("---")
+print(t.render(ansible_managed="x", egress_sandbox_agent_suffix="-safe",
+               item={"key": "codex", "value": "/bin/codex"}, egress_sandbox_agent_env={}))
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *$'AGENT_COMMAND=/bin/gemini\nAGENT_ENV_FILE=/etc/p.env\nB=2'* ]]
+    [[ "${output#*---}" != *"AGENT_ENV_FILE"* ]]
+}

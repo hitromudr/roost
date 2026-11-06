@@ -92,6 +92,31 @@
     mode: "0644"
   loop: "{{ egress_sandbox_agents | dict2items }}"
 
+- name: Write the files the agents' configuration names
+  ansible.builtin.copy:
+    content: "{{ (item.value if item.value is string else item.value | to_nice_json) }}\n"
+    dest: "{{ egress_sandbox_agent_dir }}/{{ item.key }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ egress_sandbox_agent_files | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Seed each agent's own proxy file
+  ansible.builtin.copy:
+    content: |
+      # Proxy for the {{ item.key }} agent only (egress_sandbox_agent_env).
+      # PROXY_URL=http://user:password@127.0.0.1:PORT
+    dest: "{{ item.value.AGENT_ENV_FILE }}"
+    owner: "{{ egress_sandbox_users | first | default('root') }}"
+    group: "{{ egress_sandbox_group }}"
+    mode: "0640"
+    force: false
+  loop: "{{ egress_sandbox_agent_env | dict2items | selectattr('value.AGENT_ENV_FILE', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.key }}"
+
 - name: Install a launcher for each extra agent
   ansible.builtin.file:
     src: "{{ egress_sandbox_wrapper }}"

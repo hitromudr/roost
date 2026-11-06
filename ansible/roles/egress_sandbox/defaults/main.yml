@@ -36,6 +36,29 @@ egress_sandbox_agent_command: /usr/local/bin/claude
 # keep in step for no gain (see docs/superpowers/specs/2026-08-04-second-agent).
 egress_sandbox_agents: {}
 
+# Extra lines for an agent's file, by agent name. Read by the launcher before
+# the machine's configuration and over the caller's environment, so this is
+# where an agent gets an exit of its own:
+#
+#   egress_sandbox_agent_env:
+#     gemini-sub:
+#       AGENT_ENV_FILE: /etc/roost/agents/gemini-sub.proxy.env
+#       GEMINI_CLI_SYSTEM_SETTINGS_PATH: /etc/roost/agents/gemini-sub.settings.json
+#
+# A proxy file named here is seeded like the main one (0640, sandbox group,
+# never overwritten); PROXY_URL goes into it by hand.
+egress_sandbox_agent_env: {}
+
+# Files an agent's configuration points at, by path under
+# egress_sandbox_agent_dir: written root-owned, 0644. Root ownership is the
+# point for some agents — Gemini CLI skips a system settings file whose
+# directory a user owns (measured on 0.66.0, 2026-11-06).
+#
+#   egress_sandbox_agent_files:
+#     gemini-sub.settings.json:          # a mapping is written as JSON
+#       security: {auth: {selectedType: oauth-personal}}
+egress_sandbox_agent_files: {}
+
 # What those launchers are called. `-safe` is the name the wrappers on these
 # machines already carry, so the habit transfers.
 egress_sandbox_agent_suffix: "-safe"

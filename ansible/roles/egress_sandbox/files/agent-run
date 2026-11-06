@@ -35,8 +35,10 @@ load_env() {
 	while IFS='=' read -r key value; do
 		case "$key" in '' | \#*) continue ;; esac
 		# Environment wins: a one-off override should not need the file
-		# edited, and the tests rely on this too.
-		[ -n "${!key:-}" ] || export "$key=$value"
+		# edited, and the tests rely on this too. An agent's own file is the
+		# exception (second argument): the launcher's name is the request.
+		[ -z "${2:-}" ] && [ -n "${!key:-}" ] && continue
+		export "$key=$value"
 	done < "$1"
 }
 
@@ -76,8 +78,13 @@ case "$SELF" in
 		# session (a helper, a second window, a button that runs a command in
 		# the current one) would otherwise start that agent again under this
 		# one's name, and report the wrong version when asked.
+		#
+		# The same holds for everything else the agent's file names — its own
+		# proxy file, the variables that pin its mode: a key-mode window opened
+		# from inside a subscription session must not leave through the
+		# subscription's exit (2026-11-06).
 		unset AGENT_COMMAND
-		load_env "$AGENT_DIR/$agent.env"
+		load_env "$AGENT_DIR/$agent.env" force
 		# An agent file naming a launcher would loop: the launcher resolves the
 		# name, finds the launcher, runs it. Cheap to say once.
 		if [ "$(readlink -f -- "${AGENT_COMMAND:-/nonexistent}" 2>/dev/null)" = "$(readlink -f -- "$0")" ]; then
@@ -160,6 +167,11 @@ if [ -n "${PROXY_URL:-}" ]; then
 	fi
 	export NO_PROXY="$no_proxy_list" no_proxy="$no_proxy_list"
 fi
+
+# Which proxy file this agent used is the launcher's business, not the
+# session's: exported onward, it would hand this exit to the next launcher
+# started from inside the session whose own file names none.
+export -n AGENT_ENV_FILE 2>/dev/null || true
 
 # A hook for the test suite: show what the environment would be, then carry on.
 if [ -n "${AGENT_DEBUG_ENV:-}" ]; then
