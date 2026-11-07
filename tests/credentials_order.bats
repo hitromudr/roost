@@ -56,3 +56,8 @@ PY
     [[ "$output" == *$'AGENT_COMMAND=/bin/gemini\nAGENT_ENV_FILE=/etc/p.env\nB=2'* ]]
     [[ "${output#*---}" != *"AGENT_ENV_FILE"* ]]
 }
+
+@test "sudoers drop-in keeps proxy variables across sudo" {
+    grep -A10 'name: Keep proxy variables across sudo inside the sandbox' "$ROLE" | grep -q '/etc/sudoers.d/roost-proxy-env'
+    grep -A10 'name: Keep proxy variables across sudo inside the sandbox' "$ROLE" | grep -q 'Defaults env_keep += "HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy"'
+}

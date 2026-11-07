@@ -65,6 +65,30 @@
     dest: "{{ egress_sandbox_exec_wrapper }}"
     mode: "0755"
 
+# sudo switches uid:gid to 0:0 (outside --gid-owner) and resets the environment
+# by default, so `sudo curl ...` inside a sandboxed session would bypass the
+# proxy and exit from the host's direct IP. Keeping the proxy variables in
+# sudoers preserves the session's proxy contour across sudo.
+- name: Ensure /etc/sudoers.d exists
+  ansible.builtin.file:
+    path: /etc/sudoers.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  when: egress_sandbox_profile != 'direct'
+
+- name: Keep proxy variables across sudo inside the sandbox
+  ansible.builtin.copy:
+    content: |
+      # Managed by roost (role egress_sandbox).
+      Defaults env_keep += "HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy"
+    dest: /etc/sudoers.d/roost-proxy-env
+    owner: root
+    group: root
+    mode: "0440"
+  when: egress_sandbox_profile != 'direct'
+
 # The launcher reads its configuration from the environment, and a wrapper
 # script is the least surprising way to supply it: the user types `agent-run`,
 # not a line of exports.

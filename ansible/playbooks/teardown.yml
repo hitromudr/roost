@@ -241,6 +241,7 @@
         - /usr/local/bin/agent-exec
         - /usr/local/bin/roost-session
         - /etc/profile.d/roost-session.sh
+        - /etc/sudoers.d/roost-proxy-env
 
     # A second agent is a symlink to the launcher, and the launcher above has
     # just gone: leaving the links behind would leave `codex-safe` on the
