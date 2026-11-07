@@ -371,3 +371,16 @@ STUB
     [[ "$output" == *"env:HTTPS_PROXY="* ]]
     [[ "$output" != *"env:AGENT_ENV_FILE="* ]]
 }
+
+@test "plain agent-run drops CLAUDE_CONFIG_DIR inherited from a claude-ge session" {
+    cat > "$STUB_DIR/sg" <<'STUB'
+#!/usr/bin/env bash
+echo "sg-called group=$1"
+env | grep -E '^(CLAUDE_CONFIG_DIR|HTTPS_PROXY)=' | sed 's/^/env:/'
+STUB
+    chmod +x "$STUB_DIR/sg"
+    run env AGENT_PROFILE=proxied CLAUDE_CONFIG_DIR=/home/dms/.claude-ge "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"env:HTTPS_PROXY=http://user:secret@127.0.0.1:8129"* ]]
+    [[ "$output" != *"env:CLAUDE_CONFIG_DIR="* ]]
+}

@@ -66,6 +66,9 @@ case "$SELF" in
 				exec "$named" "$@"
 			fi
 		fi
+		# Plain agent-run is the machine's default Claude contour; drop an
+		# alternate profile dir inherited from a claude-ge-safe parent session.
+		unset CLAUDE_CONFIG_DIR
 		;;
 	*)
 		agent="${SELF%-safe}"
