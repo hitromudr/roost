@@ -67,8 +67,10 @@ case "$SELF" in
 			fi
 		fi
 		# Plain agent-run is the machine's default Claude contour; drop an
-		# alternate profile dir inherited from a claude-ge-safe parent session.
-		unset CLAUDE_CONFIG_DIR
+		# alternate profile dir or endpoint inherited from a parent session.
+		unset CLAUDE_CONFIG_DIR ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN \
+			ANTHROPIC_API_KEY ANTHROPIC_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL \
+			ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL
 		;;
 	*)
 		agent="${SELF%-safe}"
@@ -85,8 +87,12 @@ case "$SELF" in
 		# The same holds for everything else the agent's file names — its own
 		# proxy file, the variables that pin its mode: a key-mode window opened
 		# from inside a subscription session must not leave through the
-		# subscription's exit (2026-11-06).
-		unset AGENT_COMMAND
+		# subscription's exit (2026-11-06), nor inherit another Claude contour's
+		# profile dir or endpoint (2026-11-09).
+		unset AGENT_COMMAND CLAUDE_CONFIG_DIR ANTHROPIC_BASE_URL \
+			ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL \
+			ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL \
+			ANTHROPIC_DEFAULT_OPUS_MODEL
 		load_env "$AGENT_DIR/$agent.env" force
 		# An agent file naming a launcher would loop: the launcher resolves the
 		# name, finds the launcher, runs it. Cheap to say once.
@@ -126,6 +132,7 @@ if [ "$(readlink -f -- "$(command -v -- "$COMMAND")" 2>/dev/null)" = "$(readlink
 	die "AGENT_COMMAND=$COMMAND is this launcher, not an agent (it would start itself forever)"
 fi
 
+unset PROXY_URL
 if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
 	# Credentials in a world-readable file are a misconfiguration worth
 	# stopping for: every account on the machine could read the proxy
@@ -139,8 +146,10 @@ if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
 	esac
 	[ -r "$ENV_FILE" ] || die "$ENV_FILE is not readable by $(id -un) — check its group"
 
+	set -a
 	# shellcheck disable=SC1090
 	. "$ENV_FILE"
+	set +a
 fi
 
 # On every profile but `direct` the proxy is the only sanctioned way out, so
@@ -174,7 +183,7 @@ fi
 # Which proxy file this agent used is the launcher's business, not the
 # session's: exported onward, it would hand this exit to the next launcher
 # started from inside the session whose own file names none.
-export -n AGENT_ENV_FILE 2>/dev/null || true
+export -n AGENT_ENV_FILE PROXY_URL 2>/dev/null || true
 
 # A hook for the test suite: show what the environment would be, then carry on.
 if [ -n "${AGENT_DEBUG_ENV:-}" ]; then
