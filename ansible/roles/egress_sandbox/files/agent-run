@@ -68,9 +68,13 @@ case "$SELF" in
 		fi
 		# Plain agent-run is the machine's default Claude contour; drop an
 		# alternate profile dir or endpoint inherited from a parent session.
+		# CLAUDE_CODE_MAX_CONTEXT_TOKENS belongs to the contour that declared it
+		# (a gateway model Claude Code does not recognize): inherited, it would
+		# cap a session on a recognized claude- ID if compaction were off too.
 		unset CLAUDE_CONFIG_DIR ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN \
 			ANTHROPIC_API_KEY ANTHROPIC_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL \
-			ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL
+			ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL \
+			CLAUDE_CODE_MAX_CONTEXT_TOKENS
 		;;
 	*)
 		agent="${SELF%-safe}"
@@ -91,6 +95,7 @@ case "$SELF" in
 		# profile dir or endpoint (2026-11-09).
 		unset AGENT_COMMAND CLAUDE_CONFIG_DIR ANTHROPIC_BASE_URL \
 			ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_MODEL \
+			CLAUDE_CODE_MAX_CONTEXT_TOKENS \
 			ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL \
 			ANTHROPIC_DEFAULT_OPUS_MODEL
 		load_env "$AGENT_DIR/$agent.env" force
