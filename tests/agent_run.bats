@@ -389,7 +389,7 @@ STUB
     cat > "$STUB_DIR/sg" <<'STUB'
 #!/usr/bin/env bash
 echo "sg-called group=$1"
-env | grep -E '^(CLAUDE_CONFIG_DIR|ANTHROPIC_[A-Z_]+|HTTPS_PROXY)=' | sed 's/^/env:/'
+env | grep -E '^(CLAUDE_CONFIG_DIR|ANTHROPIC_[A-Z_]+|CLAUDE_CODE_[A-Z_]+|HTTPS_PROXY)=' | sed 's/^/env:/'
 STUB
     chmod +x "$STUB_DIR/sg"
     run env AGENT_PROFILE=proxied \
@@ -400,10 +400,12 @@ STUB
         ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5.3-low \
         ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5.3 \
         ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.3-max \
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
         "$SCRIPT"
     [ "$status" -eq 0 ]
     [[ "$output" == *"env:HTTPS_PROXY=http://user:secret@127.0.0.1:8129"* ]]
     [[ "$output" != *"env:ANTHROPIC_"* ]]
+    [[ "$output" != *"env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="* ]]
 
     mkdir -p "$BATS_TEST_TMPDIR/agents"
     printf 'PROXY_URL=http://ge:pw@127.0.0.1:12129\n' > "$BATS_TEST_TMPDIR/ge.env"
@@ -415,11 +417,13 @@ STUB
         ANTHROPIC_BASE_URL=https://llm.exan.tech \
         ANTHROPIC_AUTH_TOKEN=glm-secret \
         ANTHROPIC_MODEL=glm-5.3 \
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
         "$BATS_TEST_TMPDIR/claude-ge-safe"
     [ "$status" -eq 0 ]
     [[ "$output" == *"env:CLAUDE_CONFIG_DIR=/home/dms/.claude-ge"* ]]
     [[ "$output" == *"env:HTTPS_PROXY=http://ge:pw@127.0.0.1:12129"* ]]
     [[ "$output" != *"env:ANTHROPIC_"* ]]
+    [[ "$output" != *"env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="* ]]
 }
 
 @test "claude-glm-safe exports its endpoint, model defaults, and secret env while dropping CLAUDE_CONFIG_DIR" {
